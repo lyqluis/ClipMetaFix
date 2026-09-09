@@ -32,14 +32,6 @@ jobs:
         with:
           gradle-version: 8.10
 
-      - name: Ensure Wrapper Jar
-        run: |
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            mkdir -p gradle/wrapper
-            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.10.0/gradle/wrapper/gradle-wrapper.jar
-            test -s gradle/wrapper/gradle-wrapper.jar && jar tf gradle/wrapper/gradle-wrapper.jar | grep -q GradleWrapperMain || (echo "wrapper jar invalid" && ls -lh gradle/wrapper/ && exit 1)
-          fi
-
       - name: Decode keystore
         if: env.KEYSTORE_BASE64 != ''
         env:
@@ -53,7 +45,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --stacktrace
+        run: gradle assembleRelease --stacktrace
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
