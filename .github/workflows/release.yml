@@ -32,10 +32,11 @@ jobs:
         with:
           gradle-version: 8.10
 
-      - name: Generate Wrapper if missing
+      - name: Ensure Wrapper Jar
         run: |
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            gradle wrapper --gradle-version 8.10
+            mkdir -p gradle/wrapper
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar https://github.com/gradle/gradle/raw/v8.10.0/gradle/wrapper/gradle-wrapper.jar
           fi
 
       - name: Decode keystore
