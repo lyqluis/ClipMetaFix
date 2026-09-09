@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClipMetaFix</string>
+    <string name="pick_original">选择原片 A</string>
+    <string name="pick_edited">选择剪辑版 B</string>
+    <string name="do_fix">执行修复</string>
+    <string name="hint_pick_a">请先选择原片 A，用于提取元数据</string>
+    <string name="hint_pick_b">请选择剪辑版 B（澎湃剪辑后丢失元数据的视频）</string>
+</resources>

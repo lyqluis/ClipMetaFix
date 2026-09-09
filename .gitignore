@@ -1,0 +1,16 @@
+.gradle/
+build/
+*.iml
+.local.properties
+local.properties
+.DS_Store
+app/build/
+mp4engine/build/
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+*.ap_
+*.aab
+*.apk
+!gradle/wrapper/gradle-wrapper.jar
