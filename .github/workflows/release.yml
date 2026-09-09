@@ -36,7 +36,8 @@ jobs:
         run: |
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
             mkdir -p gradle/wrapper
-            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar https://github.com/gradle/gradle/raw/v8.10.0/gradle/wrapper/gradle-wrapper.jar
+            curl -fsSL -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.10.0/gradle/wrapper/gradle-wrapper.jar
+            test -s gradle/wrapper/gradle-wrapper.jar && jar tf gradle/wrapper/gradle-wrapper.jar | grep -q GradleWrapperMain || (echo "wrapper jar invalid" && ls -lh gradle/wrapper/ && exit 1)
           fi
 
       - name: Decode keystore
