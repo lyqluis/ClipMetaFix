@@ -4,7 +4,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 
 class Mp4Exception(msg: String) : Exception(msg)
 
@@ -22,11 +21,8 @@ internal object T {
     val Mcvr = typeOf("mcvr")
     val Xyz  = byte4(0xA9, 'x'.code, 'y'.code, 'z'.code) // ©xyz
 
-    private fun typeOf(s: String): Int =
-        byte4(s[0].code, s[1].code, s[2].code, s[3].code)
-
-    private fun byte4(a: Int, b: Int, c: Int, d: Int): Int =
-        (a shl 24) or (b shl 16) or (c shl 8) or d
+    private fun typeOf(s: String): Int = byte4(s[0].code, s[1].code, s[2].code, s[3].code)
+    private fun byte4(a: Int, b: Int, c: Int, d: Int): Int = (a shl 24) or (b shl 16) or (c shl 8) or d
 }
 
 /** 内存中的一个 box（buf 为整个 moov 的字节，start 是 header 起点） */
@@ -100,12 +96,7 @@ internal fun scanTopLevel(ch: FileChannel): List<TopBox> {
     return out
 }
 
-internal fun readAt(ch: FileChannel, pos: Long, len: Int): ByteArray {
-    val buf = ByteBuffer.allocate(len)
-    readFully(ch, buf, pos)
-    return buf.array()
-}
-
+/** 从 pos 读满整个 buf（limit 为准）。读不到就报错，绝不空转 */
 internal fun readFully(ch: FileChannel, buf: ByteBuffer, pos: Long) {
     var p = pos
     var idle = 0
@@ -119,21 +110,37 @@ internal fun readFully(ch: FileChannel, buf: ByteBuffer, pos: Long) {
     buf.flip()
 }
 
+internal fun readAt(ch: FileChannel, pos: Long, len: Int): ByteArray {
+    val buf = ByteBuffer.allocate(len)
+    readFully(ch, buf, pos)
+    return buf.array()
+}
+
+/** 通道拷贝 [from, to)。进度用显式计数器 got，不依赖 ByteBuffer 的 position/limit 状态 */
 internal fun copyRange(src: FileChannel, from: Long, to: Long, dst: FileChannel) {
     var p = from
     val buf = ByteBuffer.allocate(1024 * 1024)
     while (p < to) {
-        buf.clear().limit(minOf(buf.capacity().toLong(), to - p).toInt())
-        readFully(src, buf, p)
+        val want = minOf(buf.capacity().toLong(), to - p).toInt()
+        buf.clear()
+        buf.limit(want)
+        var got = 0
+        var idle = 0
+        while (got < want) {
+            val n = src.read(buf, p + got)
+            if (n < 0) throw Mp4Exception("文件被截断")
+            if (n == 0 && ++idle > 1000) throw Mp4Exception("读取无进展 @${p + got}")
+            if (n > 0) { idle = 0; got += n }
+        }
         buf.flip()
         while (buf.hasRemaining()) {
             if (dst.write(buf) == 0) throw Mp4Exception("写入无进展")
         }
-        p += buf.limit()
+        p += got
     }
 }
 
-/** 用 4 字节 size 打包一个 box（payload 永远远小于 4GB，64 位分支留作防御） */
+/** 用 4 字节 size 打包一个 box */
 internal fun wrapBox(type: Int, payload: ByteArray): ByteArray {
     val total = payload.size.toLong() + 8
     val head = ByteBuffer.allocate(if (total <= 0xFFFFFFFFL) 8 else 16)
