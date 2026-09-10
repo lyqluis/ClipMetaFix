@@ -108,7 +108,8 @@ class MetaFixerTest {
             assertArrayEquals(u32(0x77777777) + u32(0x88888888.toInt()), scopeDates(traks[1], T.Tkhd))
 
             // 3. udta：有 ©xyz、无 mcvr
-            val udta = children.firstOrNull { it.type == T.Udta } ?: fail("输出缺少 udta")
+            val udta = children.firstOrNull { it.type == T.Udta }
+              ?: throw AssertionError("输出缺少 udta")
             val udtaKids = view.children(udta.payloadStart, udta.end)
             assertTrue(udtaKids.any { it.type == T.Xyz })
             assertFalse(udtaKids.any { it.type == T.Mcvr })
