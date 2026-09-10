@@ -182,6 +182,17 @@ fun ClipMetaFixScreen() {
         }
     }
 
+    /** A 的主通道：相册直选（真实 MediaStore URI，可读 GPS）；无 Gallery 则回退位置授权选择器。 */
+    fun launchGalleryForA() {
+        try {
+            if (!PickVideoViaGallery.isAvailable(context)) throw ActivityNotFoundException()
+            pendingTarget = "A"
+            pickOriginalGallery.launch(Unit)
+        } catch (_: Exception) {
+            launchWithFallback("A")
+        }
+    }
+
     // 位置权限申请（仅 Q+ 需要；拒绝也允许继续选，只是 GPS 会为空）
     val permissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -195,17 +206,6 @@ fun ClipMetaFixScreen() {
             }
             // pendingTarget 在 picker 回调里清；若权限框取消导致 picker 未弹，这里兜底不清由下次覆盖
         }
-
-    /** A 的主通道：相册直选（真实 MediaStore URI，可读 GPS）；无 Gallery 则回退位置授权选择器。 */
-    fun launchGalleryForA() {
-        try {
-            if (!PickVideoViaGallery.isAvailable(context)) throw ActivityNotFoundException()
-            pendingTarget = "A"
-            pickOriginalGallery.launch(Unit)
-        } catch (_: Exception) {
-            launchWithFallback("A")
-        }
-    }
 
     fun onPickClicked(target: String) {
         // 只有 A 强依赖位置权限才先申请；B 直接进选择器
