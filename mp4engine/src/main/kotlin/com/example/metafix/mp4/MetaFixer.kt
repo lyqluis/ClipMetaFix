@@ -30,7 +30,8 @@ object MetaFixer {
 
     private fun rebuildMoov(moovBuf: ByteArray, donor: DonorMeta): ByteArray {
         val view = BoxView(moovBuf)
-        val src = view.children()
+        val moovBox = view.children().single()
+        val src = view.children(moovBox.payloadStart, moovBox.end)
         if (src.count { it.type == T.Trak } != donor.tracks.size)
             throw Mp4Exception("A/B 轨道数不一致，无法按顺序对应")
 

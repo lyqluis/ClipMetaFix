@@ -27,7 +27,8 @@ object DonorExtractor {
                 ?: throw Mp4Exception("A 不是 MP4 或缺少 moov")
             val buf = readAt(ch, moov.offset, moov.size.toInt())
             val view = BoxView(buf)
-            val children = view.children()
+            val moovBox = view.children().single()
+            val children = view.children(moovBox.payloadStart, moovBox.end)
 
             // 1. mvhd 日期
             val mvhd = children.firstOrNull { it.type == T.Mvhd }

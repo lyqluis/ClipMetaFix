@@ -85,7 +85,8 @@ class MetaFixerTest {
             val topBoxes = scanTopLevel(ch)
             val moov = topBoxes.first { it.type == T.Moov }
             val view = BoxView(readAt(ch, moov.offset, moov.size.toInt()))
-            val children = view.children()
+            val moovBox = view.children().single()
+            val children = view.children(moovBox.payloadStart, moovBox.end)
 
             // 1. mvhd 日期 == A
             val mvhd = children.first { it.type == T.Mvhd }
@@ -136,6 +137,8 @@ class MetaFixerTest {
         FileChannel.open(f.toPath(), StandardOpenOption.READ).use { ch ->
             val moov = scanTopLevel(ch).first { it.type == T.Moov }
             val view = BoxView(readAt(ch, moov.offset, moov.size.toInt()))
+            val moovBox = view.children().single()
+            val children = view.children(moovBox.payloadStart, moovBox.end)
             return view to view.children()
         }
     }
