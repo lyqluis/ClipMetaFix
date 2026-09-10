@@ -1,13 +1,16 @@
 package com.clipmeta.fix
 
 import android.Manifest
+import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -57,7 +60,23 @@ fun ClipMetaFixScreen() {
     var lastResult by remember { mutableStateOf<RepairResult?>(null) }
     var locGranted by remember { mutableStateOf(hasMediaLocationPermission(context)) }
     var pendingTarget by remember { mutableStateOf<String?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var pendingDeleteUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val scope = rememberCoroutineScope()
+
+    fun onDeleteDone(targets: List<Uri>) {
+        for (u in targets) com.clipmeta.fix.util.MediaDeleter.releasePersistable(context, u)
+        if (originalUri in targets) {
+            originalUri = null
+            originalInfo = null
+        }
+        if (editedUri in targets) {
+            editedUri = null
+            editedInfo = null
+        }
+        lastResult = null
+        status = "已删除所选原文件，请去相册确认"
+    }
 
     fun onUriPicked(target: String, uri: Uri) {
         if (target == "A") {
@@ -182,6 +201,85 @@ fun ClipMetaFixScreen() {
         }
     }
 
+    // 删除系统授权回调（R+ 批量删除 / Q 单条授权）：用户点了允许即视为删完，清状态。
+    val deleteConsentLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                onDeleteDone(pendingDeleteUris)
+            } else {
+                status = "删除未完成（系统确认被拒绝或取消），原文件仍在"
+            }
+            pendingDeleteUris = emptyList()
+        }
+
+    /** 直接删除（无需系统框 / 系统框拿不到时）；Q 他人文件走授权 Sender。 */
+    fun runDeleteDirect(targets: List<Uri>) {
+        scope.launch {
+            var needSender: IntentSender? = null
+            val failed = mutableListOf<Uri>()
+            withContext(Dispatchers.IO) {
+                for (uri in targets) {
+                    try {
+                        if (com.clipmeta.fix.util.MediaDeleter.deleteDirect(context, uri)) {
+                            com.clipmeta.fix.util.MediaDeleter.releasePersistable(context, uri)
+                        } else {
+                            failed.add(uri)
+                        }
+                    } catch (e: Exception) {
+                        val sender = (e as? android.app.RecoverableSecurityException)
+                            ?.userAction?.actionIntent?.intentSender
+                        if (sender != null && needSender == null) needSender = sender
+                        else failed.add(uri)
+                    }
+                }
+            }
+            val sender = needSender
+            if (sender != null) {
+                pendingDeleteUris = targets
+                try {
+                    deleteConsentLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                } catch (_: Exception) {
+                    pendingDeleteUris = emptyList()
+                    status = "删除失败：无法弹出系统授权，请在相册手动删"
+                }
+            } else if (failed.isEmpty()) {
+                onDeleteDone(targets)
+            } else {
+                status = "部分删除失败（${failed.size} 个），请在相册手动删除剩余文件"
+            }
+        }
+    }
+
+    /** 删除入口：安全规则 overwrite→只删A；insert→删A+旧B。picker 会话 URI 删不动会明说。 */
+    fun onDeleteClicked() {
+        val r = lastResult as? RepairResult.Success ?: return
+        val targets = mutableListOf<Uri>()
+        originalUri?.let { targets.add(it) }
+        if (r.method != "overwrite") editedUri?.let { targets.add(it) }
+        if (targets.isEmpty()) {
+            status = "没有可删的文件"
+            return
+        }
+        val (deletable, undeletable) = targets.partition { com.clipmeta.fix.util.MediaDeleter.isDeletable(it) }
+        if (undeletable.isNotEmpty()) {
+            status = "照片选择器返回的临时条目无法删除，请在相册手动处理；其余继续"
+        }
+        if (deletable.isEmpty()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val s = com.clipmeta.fix.util.MediaDeleter.buildDeleteRequest(context, deletable)
+            if (s != null) {
+                pendingDeleteUris = deletable
+                try {
+                    deleteConsentLauncher.launch(IntentSenderRequest.Builder(s).build())
+                    return
+                } catch (_: Exception) {
+                    pendingDeleteUris = emptyList()
+                }
+            }
+        }
+        runDeleteDirect(deletable)
+    }
+
     /** A 的主通道：相册直选（真实 MediaStore URI，可读 GPS）；无 Gallery 则回退位置授权选择器。 */
     fun launchGalleryForA() {
         try {
@@ -246,7 +344,7 @@ fun ClipMetaFixScreen() {
                 Text("1. 选择原片 A", style = MaterialTheme.typography.titleMedium)
                 Text("原片是相机直出的完整视频，包含 GPS 与拍摄时间", style = MaterialTheme.typography.bodySmall)
                 Text(
-                    "默认走相册直选，可直接读到 GPS；若用照片选择器，请勾选“保留定位/相机数据”（如有），否则 GPS 会被系统去掉",
+                    "默认走相册直选，可直接读到 GPS；文件方式会打开 DCIM/Camera 目录",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -258,14 +356,7 @@ fun ClipMetaFixScreen() {
                         Text("文件方式选 A")
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
-                        pendingTarget = "A"
-                        launchWithFallback("A")
-                    }) {
-                        Text("照片选择器选 A（无GPS时备用）")
-                    }
-                }
+
                 when {
                     originalLoading -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -346,6 +437,16 @@ fun ClipMetaFixScreen() {
                         is RepairResult.Success -> {
                             Text("moov ${r.oldMoov} → ${r.newMoov} bytes，方式: ${r.method}", style = MaterialTheme.typography.bodySmall)
                             r.newUri?.let { uri -> Text("新Uri: $uri", style = MaterialTheme.typography.labelSmall) }
+                            if (!isProcessing) {
+                                val deleteLabel = if (r.method == "overwrite") "删除原片A（B即成果，保留）"
+                                else "删除原片A和旧B"
+                                OutlinedButton(
+                                    onClick = { showDeleteConfirm = true },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(deleteLabel, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
                         }
                         is RepairResult.Failure -> {}
                     }
@@ -354,6 +455,31 @@ fun ClipMetaFixScreen() {
                     Text("请先完成步骤 1 与 2", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+
+        if (showDeleteConfirm) {
+            val r = lastResult as? RepairResult.Success
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text("确认删除？") },
+                text = {
+                    Text(
+                        if (r?.method == "overwrite")
+                            "将删除原片 A。剪辑版 B 是本次修复的成果，会保留。此操作不可恢复。"
+                        else "将删除原片 A 和旧剪辑版 B，保留修复后的新文件。此操作不可恢复。"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showDeleteConfirm = false; onDeleteClicked() }) {
+                        Text("删除", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text("取消")
+                    }
+                }
+            )
         }
 
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
