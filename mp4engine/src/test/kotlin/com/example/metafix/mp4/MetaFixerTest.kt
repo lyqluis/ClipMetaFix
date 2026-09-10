@@ -48,7 +48,7 @@ class MetaFixerTest {
             box(T.Mcvr, ByteArray(64) { it.toByte() }))
         val meta = fullBox(T.Meta, 0, 0, ByteArray(100) { (it * 7 + 3).toByte() })
         val moov = box(T.Moov, mvhd, udta, meta, trakV, trakA)
-        return box(T.Ftyp, "mp42".toByteArray()) + ByteArray(16) + moov
+        return box(T.Ftyp, "mp42".toByteArray()) + box(typeOf("mdat"), ByteArray(16)) + moov
     }
 
     private fun buildB(moovFirst: Boolean): Pair<ByteArray, ByteArray> {
