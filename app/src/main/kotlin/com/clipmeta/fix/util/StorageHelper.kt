@@ -27,7 +27,10 @@ object StorageHelper {
         val tmp = File.createTempFile(prefix, ".mp4", context.cacheDir)
         // Q+ 必须先要原始字节，否则 openInputStream 拿到的是剥掉 ©xyz 的脱敏流。
         // 先试 requireOriginal，失败（如非 MediaStore provider）再回退裸 uri。
-        val candidates: List<Pair<String, Uri>> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // picker 会话 URI 不支持 requireOriginal，直接读裸流（唯一读法）。
+        val candidates: List<Pair<String, Uri>> = if (UriRequireOriginal.isPickerUri(uri)) {
+            listOf("picker-raw" to uri)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val wrapped = UriRequireOriginal.wrap(uri)
             if (wrapped != uri) listOf("wrapped" to wrapped, "raw" to uri) else listOf("raw-direct" to uri)
         } else {

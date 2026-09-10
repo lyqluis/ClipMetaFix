@@ -20,6 +20,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.clipmeta.fix.util.MediaInfoHelper
 import com.clipmeta.fix.util.Mp4Repairer
+import com.clipmeta.fix.util.PickVideoViaFiles
+import com.clipmeta.fix.util.PickVideoViaGallery
 import com.clipmeta.fix.util.PickVideoWithLocation
 import com.clipmeta.fix.util.RepairResult
 import com.clipmeta.fix.util.VideoInfo
@@ -111,10 +113,24 @@ fun ClipMetaFixScreen() {
             if (uri != null) onUriPicked("B", uri)
             pendingTarget = null
         }
-    // 文件管理器直选（备用通道）：绕过相册“安全访问”picker，走 DocumentsProvider 管道。
-    // 若相册通道被脱敏，用它重选 A，看 ©xyz 能否回来。
+    // 相册直选（A 的主通道）：返回真实 MediaStore URI，可读原始字节（含 GPS）。
+    // 照片选择器（content://media/picker/...）不支持 requireOriginal，注定无 GPS，
+    // 因此 A 默认走这里；无 Gallery 机型回退到位置授权选择器。
+    val pickOriginalGallery =
+        rememberLauncherForActivityResult(PickVideoViaGallery()) { uri ->
+            if (uri != null) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {}
+                onUriPicked("A", uri)
+            }
+            pendingTarget = null
+        }
+    // 文件管理器直选（备用通道）：初始定位 DCIM/Camera，走 DocumentsProvider 管道。
     val pickOriginalDoc =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        rememberLauncherForActivityResult(PickVideoViaFiles()) { uri ->
             if (uri != null) {
                 try {
                     context.contentResolver.takePersistableUriPermission(
@@ -126,7 +142,7 @@ fun ClipMetaFixScreen() {
             pendingTarget = null
         }
     val pickEditedDoc =
-        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        rememberLauncherForActivityResult(PickVideoViaFiles()) { uri ->
             if (uri != null) {
                 try {
                     context.contentResolver.takePersistableUriPermission(
@@ -171,7 +187,7 @@ fun ClipMetaFixScreen() {
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             locGranted = granted
             when (pendingTarget) {
-                "A" -> launchWithFallback("A")
+                "A", "A-gallery" -> launchGalleryForA()
                 "B" -> launchWithFallback("B")
             }
             if (!granted && pendingTarget == "A") {
@@ -180,11 +196,24 @@ fun ClipMetaFixScreen() {
             // pendingTarget 在 picker 回调里清；若权限框取消导致 picker 未弹，这里兜底不清由下次覆盖
         }
 
+    /** A 的主通道：相册直选（真实 MediaStore URI，可读 GPS）；无 Gallery 则回退位置授权选择器。 */
+    fun launchGalleryForA() {
+        try {
+            if (!PickVideoViaGallery.isAvailable(context)) throw ActivityNotFoundException()
+            pendingTarget = "A"
+            pickOriginalGallery.launch(Unit)
+        } catch (_: Exception) {
+            launchWithFallback("A")
+        }
+    }
+
     fun onPickClicked(target: String) {
         // 只有 A 强依赖位置权限才先申请；B 直接进选择器
         if (target == "A" && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !locGranted) {
-            pendingTarget = "A"
+            pendingTarget = "A-gallery"
             permissionLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+        } else if (target == "A") {
+            launchGalleryForA()
         } else {
             pendingTarget = target
             launchWithFallback(target)
@@ -217,7 +246,7 @@ fun ClipMetaFixScreen() {
                 Text("1. 选择原片 A", style = MaterialTheme.typography.titleMedium)
                 Text("原片是相机直出的完整视频，包含 GPS 与拍摄时间", style = MaterialTheme.typography.bodySmall)
                 Text(
-                    "选择时请在系统选择器中勾选“保留定位/相机数据”（如有），否则 GPS 会被系统去掉",
+                    "默认走相册直选，可直接读到 GPS；若用照片选择器，请勾选“保留定位/相机数据”（如有），否则 GPS 会被系统去掉",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -225,8 +254,16 @@ fun ClipMetaFixScreen() {
                     Button(onClick = { onPickClicked("A") }) {
                         Text("选择原片 A")
                     }
-                    OutlinedButton(onClick = { pickOriginalDoc.launch(arrayOf("video/*")) }) {
+                    OutlinedButton(onClick = { pickOriginalDoc.launch(Unit) }) {
                         Text("文件方式选 A")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        pendingTarget = "A"
+                        launchWithFallback("A")
+                    }) {
+                        Text("照片选择器选 A（无GPS时备用）")
                     }
                 }
                 when {
@@ -251,7 +288,7 @@ fun ClipMetaFixScreen() {
                     Button(onClick = { onPickClicked("B") }) {
                         Text("选择剪辑版 B")
                     }
-                    OutlinedButton(onClick = { pickEditedDoc.launch(arrayOf("video/*")) }) {
+                    OutlinedButton(onClick = { pickEditedDoc.launch(Unit) }) {
                         Text("文件方式选 B")
                     }
                 }

@@ -11,6 +11,10 @@
             <action android:name="android.provider.action.PICK_IMAGES" />
             <data android:mimeType="video/*" />
         </intent>
+        <!-- 查询相册 ACTION_PICK（选原片 A 的主通道），否则 resolveActivity 可能返回 null -->
+        <intent>
+            <action android:name="android.intent.action.PICK" />
+        </intent>
     </queries>
 
     <application

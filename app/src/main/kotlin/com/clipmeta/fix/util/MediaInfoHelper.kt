@@ -63,8 +63,10 @@ object MediaInfoHelper {
             try { retriever.release() } catch (_: Exception) {}
         }
         // 第二段：location 为空且 Q+ 时，用 requireOriginal URI 只补 location。
-        // wrapped URI 可能被 picker 系 provider 拒绝，异常则丢弃，保留第一段结果。
-        if (location.isNullOrBlank() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+        // picker 会话 URI 不支持包装，直接跳过；其他异常则丢弃，保留第一段结果。
+        if (location.isNullOrBlank() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+            !UriRequireOriginal.isPickerUri(uri)
+        ) {
             val wrapped = UriRequireOriginal.wrap(uri)
             if (wrapped != uri) {
                 val retriever2 = MediaMetadataRetriever()
@@ -112,7 +114,8 @@ object MediaInfoHelper {
                 val xyz = com.clipmeta.fix.mp4.XyzLocation.parse(extracted.udtaChildrenFiltered)
                 val hasMeta = extracted.metaRaw != null
                 val hasXyz = xyz != null
-                val orig = if (UriRequireOriginal.wrap(uri) != uri) "是" else "否"
+                val orig = if (UriRequireOriginal.isPickerUri(uri)) "跳过"
+                else if (UriRequireOriginal.wrap(uri) != uri) "是" else "否"
                 val werr = copy.wrappedError?.let { "/werr:$it" } ?: ""
                 val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}" +
                     "/orig:$orig/perm:$perm/auth:$auth/src:${copy.source}$werr"

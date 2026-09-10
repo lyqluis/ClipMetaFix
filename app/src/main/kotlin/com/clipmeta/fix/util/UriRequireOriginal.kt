@@ -26,8 +26,13 @@ object UriRequireOriginal {
     }
 
     /**
-     * 注意：不要拿 authority 来做门控。各家 picker authority 写法不一
-     * （media / photopicker / picker 系），猜不准。调用方策略一律是
-     * “裸 URI 保底 + wrapped 尽力”，wrapped 失败就回退，不做预判。
+     * 是否会话级照片选择器 URI（content://media/picker/...）。
+     * 这类 URI 官方不支持 setRequireOriginal（必抛 UnsupportedOperationException），
+     * 且裸流就是唯一读法，调用方应直接跳过包装。
      */
+    fun isPickerUri(uri: Uri): Boolean {
+        if (uri.authority != MediaStore.AUTHORITY) return false
+        val path = uri.encodedPath ?: return false
+        return path.contains("/picker/")
+    }
 }
