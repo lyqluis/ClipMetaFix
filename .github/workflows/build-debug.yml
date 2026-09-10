@@ -38,7 +38,7 @@ jobs:
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Run mp4engine unit tests
-        run: ./gradlew :mp4engine:testDebugUnitTest --stacktrace
+        run: ./gradlew :mp4engine:test --stacktrace
 
       - name: Upload Debug APK
         if: always()
