@@ -88,8 +88,13 @@ internal fun scanTopLevel(ch: FileChannel): List<TopBox> {
         } else if (size == 0L) {
             size = fileSize - pos
         }
-        if (size < header || pos + size > fileSize)
-            throw Mp4Exception("顶层 box 非法 @${pos}")
+        if (size < header || pos + size > fileSize) {
+            val avail = minOf(16L, fileSize - pos).toInt()
+            val hex = readAt(ch, pos, avail).joinToString(" ") { "%02x".format(it) }
+            throw Mp4Exception(
+                "顶层 box 非法 @${pos} sizeField=$size type=${type.toString(16)} raw=$hex"
+            )
+        }
         out.add(TopBox(type, pos, header, size))
         pos += size
     }

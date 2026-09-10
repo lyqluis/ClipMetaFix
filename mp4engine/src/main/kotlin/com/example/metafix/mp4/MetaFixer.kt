@@ -8,22 +8,24 @@ import java.nio.file.StandardOpenOption
 
 object MetaFixer {
 
-    /** donor=A 的元数据；b=剪辑版路径；out=输出路径（临时文件，验证通过前不碰 B） */
     fun fix(donor: DonorMeta, b: Path, out: Path) {
         FileChannel.open(b, StandardOpenOption.READ).use { ch ->
             val top = scanTopLevel(ch)
             val moov = top.firstOrNull { it.type == T.Moov }
-                ?: throw Mp4Exception("B 不是 MP4 或缺少 moov")
+                ?: throw Mp4Exception("B 中没有 moov")
             val moovBuf = readAt(ch, moov.offset, moov.size.toInt())
             val newMoov = rebuildMoov(moovBuf, donor)
 
             FileChannel.open(
                 out,
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING
             ).use { dst ->
-                copyRange(ch, 0, moov.offset, dst)                 // moov 之前的字节（ftyp + mdat）
-                writeAll(dst, newMoov)                             // 打过补丁的新 moov
-                copyRange(ch, moov.end, ch.size(), dst)            // moov 之后的字节（通常为空）
+                // 顺序严格为：moov 之前的字节 + 新 moov + moov 之后的字节
+                copyRange(ch, 0L, moov.offset, dst)
+                writeAll(dst, newMoov)
+                copyRange(ch, moov.end, ch.size(), dst)
             }
         }
     }
@@ -42,14 +44,11 @@ object MetaFixer {
             when (box.type) {
                 T.Mvhd -> out.write(patchDates(view, box, donor.mvhdVersion, donor.mvhdDates, "mvhd"))
                 T.Trak -> out.write(patchTrak(view, box, donor.tracks[trakIdx++]))
-                // meta 整段替换为 A 的（含 header 原样字节）
                 T.Meta -> out.write(donor.metaBox ?: view.bytes(box))
-                // B 已有 udta（意料之外）：整体重建为 A 的筛选结果
                 T.Udta -> { out.write(buildUdta(donor)); wroteUdta = true }
-                else -> out.write(view.bytes(box)) // trak 结构、stbl 等一律不动
+                else -> out.write(view.bytes(box))
             }
         }
-        // B 没有 udta：在 moov 末尾新建
         if (!wroteUdta && donor.udtaChildren.isNotEmpty()) out.write(buildUdta(donor))
         return wrapBox(T.Moov, out.toByteArray())
     }
@@ -75,7 +74,6 @@ object MetaFixer {
         return wrapBox(T.Trak, out.toByteArray())
     }
 
-    /** 只改 creation/modification：box 内 header + 4B version/flags 之后的 2×dateLen 字节 */
     private fun patchDates(
         view: BoxView, box: Box,
         donorVersion: Int, donorDates: ByteArray, name: String
@@ -83,7 +81,7 @@ object MetaFixer {
         val version = view.buf[box.payloadStart].toInt() and 0xFF
         if (version != donorVersion)
             throw Mp4Exception("$name 版本不一致：A=v$donorVersion B=v$version")
-        val bytes = view.bytes(box) // 已是副本，可直接改
+        val bytes = view.bytes(box)
         donorDates.copyInto(bytes, destinationOffset = box.headerSize + 4)
         return bytes
     }
@@ -94,11 +92,12 @@ object MetaFixer {
     }
 
     private fun writeAll(dst: FileChannel, data: ByteArray) {
-       val buf = ByteBuffer.wrap(data)
-        var pos = 0L
+        val buf = ByteBuffer.wrap(data)
+        var idle = 0
         while (buf.hasRemaining()) {
-           if (dst.write(buf, pos) == 0) throw Mp4Exception("写入无进展")
-           pos = buf.position().toLong()
+            val n = dst.write(buf)
+            if (n == 0 && ++idle > 1000) throw Mp4Exception("写入无进展")
+            if (n > 0) idle = 0
         }
     }
 }
