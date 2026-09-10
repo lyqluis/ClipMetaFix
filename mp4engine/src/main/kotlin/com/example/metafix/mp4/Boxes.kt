@@ -108,15 +108,17 @@ internal fun readAt(ch: FileChannel, pos: Long, len: Int): ByteArray {
 
 internal fun readFully(ch: FileChannel, buf: ByteBuffer, pos: Long) {
     var p = pos
+    var idle = 0
     while (buf.hasRemaining()) {
         val n = ch.read(buf, p)
         if (n < 0) throw Mp4Exception("文件被截断")
+        if (n == 0 && ++idle > 1000) throw Mp4Exception("读取无进展 @${p}")
+        if (n > 0) idle = 0
         p += n
     }
     buf.flip()
 }
 
-/** 通道拷贝 [from, to)，1MB 分块，mdat 走这条路 */
 internal fun copyRange(src: FileChannel, from: Long, to: Long, dst: FileChannel) {
     var p = from
     val buf = ByteBuffer.allocate(1024 * 1024)
@@ -124,7 +126,9 @@ internal fun copyRange(src: FileChannel, from: Long, to: Long, dst: FileChannel)
         buf.clear().limit(minOf(buf.capacity().toLong(), to - p).toInt())
         readFully(src, buf, p)
         buf.flip()
-        while (buf.hasRemaining()) dst.write(buf)
+        while (buf.hasRemaining()) {
+            if (dst.write(buf) == 0) throw Mp4Exception("写入无进展")
+        }
         p += buf.limit()
     }
 }

@@ -69,9 +69,9 @@ class MetaFixerTest {
 
     // ---------- 测试 ----------
 
-    @Test fun `moov 后置 - 端到端修复`() = runFixTest(false)
+    @Test(timeout = 15000) fun `moov 后置 - 端到端修复`() = runFixTest(false)
 
-    @Test fun `moov 前置 - 端到端修复`() = runFixTest(true)
+    @Test(timeout = 15000) fun `moov 前置 - 端到端修复`() = runFixTest(true)
 
     private fun runFixTest(moovFirst: Boolean) {
         val aFile = tmp.newFile("a.mp4").apply { writeBytes(buildA()) }
@@ -143,7 +143,7 @@ class MetaFixerTest {
         }
     }
 
-    @Test fun `非 MP4 给出明确错误`() {
+    @Test(timeout = 15000) fun `非 MP4 给出明确错误`() {
         val junk = tmp.newFile("junk.mp4").apply { writeBytes(ByteArray(100)) }
         try {
             DonorExtractor.extract(junk.toPath())

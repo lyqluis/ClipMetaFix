@@ -94,8 +94,11 @@ object MetaFixer {
     }
 
     private fun writeAll(dst: FileChannel, data: ByteArray) {
-        val buf = ByteBuffer.wrap(data)
+       val buf = ByteBuffer.wrap(data)
         var pos = 0L
-        while (buf.hasRemaining()) pos += dst.write(buf, pos)
+        while (buf.hasRemaining()) {
+           if (dst.write(buf, pos) == 0) throw Mp4Exception("写入无进展")
+           pos = buf.position().toLong()
+        }
     }
 }
