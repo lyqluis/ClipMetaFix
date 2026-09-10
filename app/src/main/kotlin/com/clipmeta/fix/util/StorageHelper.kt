@@ -12,19 +12,25 @@ import java.io.FileOutputStream
 
 object StorageHelper {
 
+    /** 拷贝结果：附带实际打开成功的流来源（诊断脱敏用）。 */
+    data class CopyResult(val file: File, val source: String) // source: wrapped | raw | raw-direct
+
     /** Copy content Uri to a temp file (streaming, no size limit) */
-    fun copyUriToTempFile(context: Context, uri: Uri, prefix: String): File {
+    fun copyUriToTempFile(context: Context, uri: Uri, prefix: String): File =
+        copyUriToTempFileWithSource(context, uri, prefix).file
+
+    fun copyUriToTempFileWithSource(context: Context, uri: Uri, prefix: String): CopyResult {
         val tmp = File.createTempFile(prefix, ".mp4", context.cacheDir)
         // Q+ 必须先要原始字节，否则 openInputStream 拿到的是剥掉 ©xyz 的脱敏流。
         // 先试 requireOriginal，失败（如非 MediaStore provider）再回退裸 uri。
-        val candidates = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val candidates: List<Pair<String, Uri>> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val wrapped = UriRequireOriginal.wrap(uri)
-            if (wrapped != uri) listOf(wrapped, uri) else listOf(uri)
+            if (wrapped != uri) listOf("wrapped" to wrapped, "raw" to uri) else listOf("raw-direct" to uri)
         } else {
-            listOf(uri)
+            listOf("raw-direct" to uri)
         }
         var lastError: Exception? = null
-        for (candidate in candidates) {
+        for ((label, candidate) in candidates) {
             try {
                 context.contentResolver.openInputStream(candidate)?.use { input ->
                     FileOutputStream(tmp).use { out ->
@@ -35,7 +41,7 @@ object StorageHelper {
                         }
                     }
                 } ?: error("Cannot open input stream for $uri")
-                return tmp
+                return CopyResult(tmp, label)
             } catch (e: Exception) {
                 lastError = e
             }

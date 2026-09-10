@@ -95,21 +95,26 @@ object MediaInfoHelper {
             return base.copy(locationSource = "system")
         }
         var tmp: java.io.File? = null
+        // 诊断行：权限是否真持有 / URI 哪家 provider，一眼区分脱敏层级。
+        val perm = if (hasMediaLocationPermission(context)) "有" else "无"
+        val auth = uri.authority ?: "-"
         return try {
-            tmp = StorageHelper.copyUriToTempFile(context, uri, "clipmeta_info_")
+            val copy = StorageHelper.copyUriToTempFileWithSource(context, uri, "clipmeta_info_")
+            tmp = copy.file
             val extracted = try {
-                com.clipmeta.fix.mp4.Mp4Parser.extract(tmp)
+                com.clipmeta.fix.mp4.Mp4Parser.extract(copy.file)
             } catch (_: Exception) {
                 null
             }
             if (extracted == null) {
-                base.copy(debugDetail = "解析失败")
+                base.copy(debugDetail = "解析失败/perm:$perm/auth:$auth/src:${copy.source}")
             } else {
                 val xyz = com.clipmeta.fix.mp4.XyzLocation.parse(extracted.udtaChildrenFiltered)
                 val hasMeta = extracted.metaRaw != null
                 val hasXyz = xyz != null
                 val orig = if (UriRequireOriginal.wrap(uri) != uri) "是" else "否"
-                val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}/orig:$orig"
+                val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}" +
+                    "/orig:$orig/perm:$perm/auth:$auth/src:${copy.source}"
                 if (xyz != null) {
                     base.copy(location = xyz, locationSource = "mp4engine", debugDetail = detail)
                 } else {
@@ -117,7 +122,7 @@ object MediaInfoHelper {
                 }
             }
         } catch (_: Exception) {
-            base
+            base.copy(debugDetail = (base.debugDetail ?: "") + "perm:$perm/auth:$auth")
         } finally {
             try { tmp?.delete() } catch (_: Exception) {}
         }
