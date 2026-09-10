@@ -13,7 +13,11 @@ data class VideoInfo(
     val date: String?,
     val location: String?,
     val width: Int?,
-    val height: Int?
+    val height: Int?,
+    /** GPS 来源：system=MediaMetadataRetriever, mp4engine=©xyz 直读 */
+    val locationSource: String? = null,
+    /** 防呆调试：如 "©xyz:有/meta:有" */
+    val debugDetail: String? = null
 )
 
 object MediaInfoHelper {
@@ -61,6 +65,46 @@ object MediaInfoHelper {
             try { retriever.release() } catch (_: Exception) {}
         }
         return VideoInfo(uri, name, size, duration, date, location, w, h)
+    }
+
+    /**
+     * 带 GPS 兜底的查询（必须在 Dispatchers.IO 调用）：
+     * retriever.LOCATION 优先（日期/时长已够用时最快），为 null 则把 Uri
+     * 拷贝到临时文件后用 mp4engine 直读 ©xyz。
+     * 注意：若系统已脱敏（无位置权限 / 选择器未勾保留定位），两种通道
+     * 都会是 null，此时如实返回 null，由 UI 提示用户重选。
+     */
+    fun queryWithGps(context: Context, uri: Uri): VideoInfo {
+        val base = query(context, uri)
+        if (!base.location.isNullOrBlank()) {
+            return base.copy(locationSource = "system")
+        }
+        var tmp: java.io.File? = null
+        return try {
+            tmp = StorageHelper.copyUriToTempFile(context, uri, "clipmeta_info_")
+            val extracted = try {
+                com.clipmeta.fix.mp4.Mp4Parser.extract(tmp)
+            } catch (_: Exception) {
+                null
+            }
+            if (extracted == null) {
+                base.copy(debugDetail = "解析失败")
+            } else {
+                val xyz = com.clipmeta.fix.mp4.XyzLocation.parse(extracted.udtaChildrenFiltered)
+                val hasMeta = extracted.metaRaw != null
+                val hasXyz = xyz != null
+                val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}"
+                if (xyz != null) {
+                    base.copy(location = xyz, locationSource = "mp4engine", debugDetail = detail)
+                } else {
+                    base.copy(debugDetail = detail)
+                }
+            }
+        } catch (_: Exception) {
+            base
+        } finally {
+            try { tmp?.delete() } catch (_: Exception) {}
+        }
     }
 
     fun formatDuration(ms: Long?): String {

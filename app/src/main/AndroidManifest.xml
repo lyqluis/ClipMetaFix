@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 读取视频 GPS(©xyz)必需：无此权限时系统会脱敏位置信息，
+         MediaMetadataRetriever.LOCATION 返回 null，openInputStream 拿到的也是去 GPS 字节 -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+
+    <!-- 查询系统照片选择器（ACTION_PICK_IMAGES），否则 resolveActivity 在 targetSdk 30+ 上永远返回 null -->
+    <queries>
+        <intent>
+            <action android:name="android.provider.action.PICK_IMAGES" />
+            <data android:mimeType="video/*" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"

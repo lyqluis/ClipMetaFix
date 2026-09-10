@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.clipmeta.fix.mp4.Mp4Parser
 import com.clipmeta.fix.mp4.Mp4Patcher
+import com.clipmeta.fix.mp4.XyzLocation
 import java.io.File
 
 sealed class RepairResult {
@@ -39,6 +40,11 @@ object Mp4Repairer {
                 return RepairResult.Failure("解析原片 A 失败: ${e.message}")
             }
             if (extracted.mvhdTimes == null) return RepairResult.Failure("原片 A 缺少 mvhd 时间，无法修复")
+            // GPS 断言：A 若无 ©xyz，极大概率是系统脱敏（未授权位置 / 选择器未勾保留定位），
+            // 此时拷出的就是去 GPS 字节，继续修只会产出无定位文件，直接失败让用户重选。
+            if (!XyzLocation.hasLocation(extracted)) {
+                return RepairResult.Failure("从原片A读不到GPS(©xyz缺失)：多半是系统脱敏。请先允许位置权限，并在选择器中勾选“保留定位/相机数据”后重新选择A再修")
+            }
             if (extracted.metaRaw == null) {
                 // Not fatal but warn; continue
             }
@@ -50,6 +56,15 @@ object Mp4Repairer {
                     // Validate
                     if (!StorageHelper.validateWithRetriever(context, tmpOut)) {
                         return RepairResult.Failure("输出文件校验失败（无法读取时长）")
+                    }
+                    // 断言输出含 GPS，防止静默产出无定位文件
+                    try {
+                        val outExtracted = Mp4Parser.extract(tmpOut)
+                        if (!XyzLocation.hasLocation(outExtracted)) {
+                            return RepairResult.Failure("输出文件缺GPS，修复未生效（A可能被系统脱敏），请重选A后重试")
+                        }
+                    } catch (_: Exception) {
+                        // 解析失败则信任 patch 自校验，不额外失败
                     }
                     // Try overwrite B first
                     val overwritten = StorageHelper.tryOverwriteOriginal(context, editedUri, tmpOut)
