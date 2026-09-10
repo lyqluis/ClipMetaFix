@@ -111,6 +111,32 @@ fun ClipMetaFixScreen() {
             if (uri != null) onUriPicked("B", uri)
             pendingTarget = null
         }
+    // 文件管理器直选（备用通道）：绕过相册“安全访问”picker，走 DocumentsProvider 管道。
+    // 若相册通道被脱敏，用它重选 A，看 ©xyz 能否回来。
+    val pickOriginalDoc =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {}
+                onUriPicked("A", uri)
+            }
+            pendingTarget = null
+        }
+    val pickEditedDoc =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {}
+                onUriPicked("B", uri)
+            }
+            pendingTarget = null
+        }
 
     fun launchWithFallback(target: String) {
         try {
@@ -195,8 +221,13 @@ fun ClipMetaFixScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Button(onClick = { onPickClicked("A") }) {
-                    Text("选择原片 A")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onPickClicked("A") }) {
+                        Text("选择原片 A")
+                    }
+                    OutlinedButton(onClick = { pickOriginalDoc.launch(arrayOf("video/*")) }) {
+                        Text("文件方式选 A")
+                    }
                 }
                 when {
                     originalLoading -> {
@@ -216,8 +247,13 @@ fun ClipMetaFixScreen() {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("2. 选择剪辑版 B", style = MaterialTheme.typography.titleMedium)
                 Text("相册剪辑后导出的新视频（丢失元数据）", style = MaterialTheme.typography.bodySmall)
-                Button(onClick = { onPickClicked("B") }) {
-                    Text("选择剪辑版 B")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onPickClicked("B") }) {
+                        Text("选择剪辑版 B")
+                    }
+                    OutlinedButton(onClick = { pickEditedDoc.launch(arrayOf("video/*")) }) {
+                        Text("文件方式选 B")
+                    }
                 }
                 when {
                     editedLoading -> {

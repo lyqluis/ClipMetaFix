@@ -12,8 +12,12 @@ import java.io.FileOutputStream
 
 object StorageHelper {
 
-    /** 拷贝结果：附带实际打开成功的流来源（诊断脱敏用）。 */
-    data class CopyResult(val file: File, val source: String) // source: wrapped | raw | raw-direct
+    /** 拷贝结果：附带实际打开成功的流来源 + wrapped 失败时的异常（诊断脱敏用）。 */
+    data class CopyResult(
+        val file: File,
+        val source: String, // wrapped | raw | raw-direct
+        val wrappedError: String? = null // 如 SecurityException: ...（单行截断）
+    )
 
     /** Copy content Uri to a temp file (streaming, no size limit) */
     fun copyUriToTempFile(context: Context, uri: Uri, prefix: String): File =
@@ -30,6 +34,7 @@ object StorageHelper {
             listOf("raw-direct" to uri)
         }
         var lastError: Exception? = null
+        var wrappedError: String? = null
         for ((label, candidate) in candidates) {
             try {
                 context.contentResolver.openInputStream(candidate)?.use { input ->
@@ -41,9 +46,13 @@ object StorageHelper {
                         }
                     }
                 } ?: error("Cannot open input stream for $uri")
-                return CopyResult(tmp, label)
+                return CopyResult(tmp, label, wrappedError)
             } catch (e: Exception) {
                 lastError = e
+                if (label == "wrapped" && wrappedError == null) {
+                    val msg = (e.message ?: "").replace(Regex("\\s+"), " ").take(120)
+                    wrappedError = e.javaClass.simpleName + (if (msg.isBlank()) "" else ":$msg")
+                }
             }
         }
         throw lastError ?: error("Cannot open input stream for $uri")

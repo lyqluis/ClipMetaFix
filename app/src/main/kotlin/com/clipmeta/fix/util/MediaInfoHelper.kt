@@ -113,8 +113,9 @@ object MediaInfoHelper {
                 val hasMeta = extracted.metaRaw != null
                 val hasXyz = xyz != null
                 val orig = if (UriRequireOriginal.wrap(uri) != uri) "是" else "否"
+                val werr = copy.wrappedError?.let { "/werr:$it" } ?: ""
                 val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}" +
-                    "/orig:$orig/perm:$perm/auth:$auth/src:${copy.source}"
+                    "/orig:$orig/perm:$perm/auth:$auth/src:${copy.source}$werr"
                 if (xyz != null) {
                     base.copy(location = xyz, locationSource = "mp4engine", debugDetail = detail)
                 } else {
