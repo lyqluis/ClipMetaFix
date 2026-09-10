@@ -1,6 +1,5 @@
-// Top-level build file
 plugins {
-    alias(libs.plugins.android.application) apply false
-    alias(libs.plugins.kotlin.android) apply false
-    alias(libs.plugins.kotlin.jvm) apply false
+    id("com.android.application") version "8.7.3" apply false
+    kotlin("android") version "2.1.0" apply false
+    kotlin("jvm") version "2.1.0" apply false
 }

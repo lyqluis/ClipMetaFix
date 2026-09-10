@@ -1,11 +1,7 @@
-plugins {
-    alias(libs.plugins.kotlin.jvm)
-}
-
-kotlin {
-    jvmToolchain(17)
-}
+plugins { kotlin("jvm") version "2.1.0" }
 
 dependencies {
-    testImplementation(libs.junit)
+    testImplementation("junit:junit:4.13.2")
 }
+
+tasks.withType<Test> { useJUnit() }

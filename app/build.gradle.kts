@@ -1,69 +1,22 @@
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    id("com.android.application")
+    kotlin("android")
 }
 
 android {
-    namespace = "com.clipmeta.fix"
-    compileSdk = 34
-
+    namespace = "com.example.metafix"
+    compileSdk = 35
     defaultConfig {
-        applicationId = "com.clipmeta.fix"
+        applicationId = "com.example.metafix"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
-        versionName = "1.0.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    signingConfigs {
-        create("release") {
-            val ksPath = file("release.keystore")
-            if (ksPath.exists()) {
-                storeFile = ksPath
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
-            }
-        }
-    }
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.findByName("release")?.takeIf { file("release.keystore").exists() }
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-    buildFeatures {
-        compose = true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
-    }
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
+        versionName = "0.1"
     }
 }
 
 dependencies {
     implementation(project(":mp4engine"))
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.compose.bom))
-    implementation(libs.compose.ui)
-    implementation(libs.compose.ui.tooling.preview)
-    implementation(libs.compose.material3)
+    implementation("androidx.activity:activity-ktx:1.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 }
