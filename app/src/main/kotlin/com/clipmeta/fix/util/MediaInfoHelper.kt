@@ -49,21 +49,35 @@ object MediaInfoHelper {
         var w: Int? = null
         var h: Int? = null
 
+        // 第一段：裸 URI 读基础字段（行为与修复前一致，时长/时间/宽高一定能回来）。
         val retriever = MediaMetadataRetriever()
         try {
-            // Q+ 同样需要原始 URI，否则 LOCATION 直接被脱敏为 null。
-            retriever.setDataSource(context, UriRequireOriginal.wrap(uri))
+            retriever.setDataSource(context, uri)
             duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             date = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
             location = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
             w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
             h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
-            if (w == null || h == null) {
-                // try rotation independent
-            }
         } catch (_: Exception) {
         } finally {
             try { retriever.release() } catch (_: Exception) {}
+        }
+        // 第二段：location 为空且 Q+ 时，用 requireOriginal URI 只补 location。
+        // wrapped URI 可能被 picker 系 provider 拒绝，异常则丢弃，保留第一段结果。
+        if (location.isNullOrBlank() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val wrapped = UriRequireOriginal.wrap(uri)
+            if (wrapped != uri) {
+                val retriever2 = MediaMetadataRetriever()
+                try {
+                    retriever2.setDataSource(context, wrapped)
+                    retriever2.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)?.let {
+                        if (it.isNotBlank()) location = it
+                    }
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever2.release() } catch (_: Exception) {}
+                }
+            }
         }
         return VideoInfo(uri, name, size, duration, date, location, w, h)
     }

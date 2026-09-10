@@ -25,12 +25,9 @@ object UriRequireOriginal {
         }
     }
 
-    /** 是否需要/能够要求原始字节（仅用于 debug 展示）。 */
-    fun isApplicable(uri: Uri): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-        val authority = uri.authority ?: return false
-        return authority == MediaStore.AUTHORITY ||
-            authority.startsWith("media") ||
-            authority.contains("media")
-    }
+    /**
+     * 注意：不要拿 authority 来做门控。各家 picker authority 写法不一
+     * （media / photopicker / picker 系），猜不准。调用方策略一律是
+     * “裸 URI 保底 + wrapped 尽力”，wrapped 失败就回退，不做预判。
+     */
 }
