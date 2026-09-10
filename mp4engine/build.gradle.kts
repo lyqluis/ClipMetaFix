@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins { kotlin("jvm") version "2.1.0" }
 
 dependencies {
@@ -6,7 +8,7 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnit()
-    timeout.set(java.time.Duration.ofMinutes(5))   // 整个任务 5 分钟兜底
+    timeout.set(Duration.ofMinutes(5))   // 整个任务 5 分钟兜底
     testLogging {
         events("passed", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
