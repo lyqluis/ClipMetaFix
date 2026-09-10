@@ -51,7 +51,8 @@ object MediaInfoHelper {
 
         val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(context, uri)
+            // Q+ 同样需要原始 URI，否则 LOCATION 直接被脱敏为 null。
+            retriever.setDataSource(context, UriRequireOriginal.wrap(uri))
             duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
             date = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
             location = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION)
@@ -93,7 +94,8 @@ object MediaInfoHelper {
                 val xyz = com.clipmeta.fix.mp4.XyzLocation.parse(extracted.udtaChildrenFiltered)
                 val hasMeta = extracted.metaRaw != null
                 val hasXyz = xyz != null
-                val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}"
+                val orig = if (UriRequireOriginal.wrap(uri) != uri) "是" else "否"
+                val detail = "©xyz:${if (hasXyz) "有" else "无"}/meta:${if (hasMeta) "有" else "无"}/orig:$orig"
                 if (xyz != null) {
                     base.copy(location = xyz, locationSource = "mp4engine", debugDetail = detail)
                 } else {

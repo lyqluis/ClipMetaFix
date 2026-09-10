@@ -15,16 +15,32 @@ object StorageHelper {
     /** Copy content Uri to a temp file (streaming, no size limit) */
     fun copyUriToTempFile(context: Context, uri: Uri, prefix: String): File {
         val tmp = File.createTempFile(prefix, ".mp4", context.cacheDir)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(tmp).use { out ->
-                val buf = ByteArray(8192)
-                var n: Int
-                while (input.read(buf).also { n = it } != -1) {
-                    out.write(buf, 0, n)
-                }
+        // Q+ 必须先要原始字节，否则 openInputStream 拿到的是剥掉 ©xyz 的脱敏流。
+        // 先试 requireOriginal，失败（如非 MediaStore provider）再回退裸 uri。
+        val candidates = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val wrapped = UriRequireOriginal.wrap(uri)
+            if (wrapped != uri) listOf(wrapped, uri) else listOf(uri)
+        } else {
+            listOf(uri)
+        }
+        var lastError: Exception? = null
+        for (candidate in candidates) {
+            try {
+                context.contentResolver.openInputStream(candidate)?.use { input ->
+                    FileOutputStream(tmp).use { out ->
+                        val buf = ByteArray(8192)
+                        var n: Int
+                        while (input.read(buf).also { n = it } != -1) {
+                            out.write(buf, 0, n)
+                        }
+                    }
+                } ?: error("Cannot open input stream for $uri")
+                return tmp
+            } catch (e: Exception) {
+                lastError = e
             }
-        } ?: error("Cannot open input stream for $uri")
-        return tmp
+        }
+        throw lastError ?: error("Cannot open input stream for $uri")
     }
 
     /**
