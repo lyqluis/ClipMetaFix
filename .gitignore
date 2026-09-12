@@ -14,3 +14,5 @@ captures/
 *.aab
 *.apk
 !gradle/wrapper/gradle-wrapper.jar
+# release signing keystore (restored in CI from KEYSTORE_BASE64, never commit)
+app/release.keystore
