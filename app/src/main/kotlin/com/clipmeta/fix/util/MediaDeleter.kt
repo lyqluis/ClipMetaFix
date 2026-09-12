@@ -35,7 +35,7 @@ object MediaDeleter {
     sealed class DeleteRequest {
         data class Ready(val sender: IntentSender) : DeleteRequest()
         data class Failed(val reason: String) : DeleteRequest()
-        data object Unsupported : DeleteRequest() // API < 30，无此接口
+        object Unsupported : DeleteRequest() // API < 30，无此接口
     }
 
     /**
@@ -43,12 +43,12 @@ object MediaDeleter {
      * picker 会话 URI 无法删除，调用方应先用 [isDeletable] 过滤并提示。
      */
     fun buildDeleteRequest(context: Context, uris: List<Uri>): DeleteRequest {
-        if (uris.isEmpty()) return Failed("空列表")
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return Unsupported
+        if (uris.isEmpty()) return DeleteRequest.Failed("空列表")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return DeleteRequest.Unsupported
         return try {
-            Ready(MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender)
+            DeleteRequest.Ready(MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender)
         } catch (e: Exception) {
-            Failed(shortErr(e))
+            DeleteRequest.Failed(shortErr(e))
         }
     }
 
