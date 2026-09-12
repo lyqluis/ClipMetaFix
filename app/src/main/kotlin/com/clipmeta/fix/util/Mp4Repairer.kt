@@ -13,12 +13,27 @@ sealed class RepairResult {
         val method: String, // "overwrite" or "insert"
         val newUri: Uri?,
         val oldMoov: Long,
-        val newMoov: Long
+        val newMoov: Long,
+        val newName: String? = null, // 目标文件名（<A基名>_cutfixed.mp4）
+        val renamed: Boolean = false // overwrite 分支的改名是否成功
     ) : RepairResult()
     data class Failure(val reason: String) : RepairResult()
 }
 
 object Mp4Repairer {
+
+    /** 轻量取文件名基名（只查 DISPLAY_NAME，不走 retriever）；失败返回 null 由调用方回退。 */
+    private fun displayBaseName(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(
+                uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }?.removeSuffix(".mp4")?.removeSuffix(".MP4")
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     fun repair(context: Context, originalUri: Uri, editedUri: Uri): RepairResult {
         var tmpA: File? = null
@@ -66,19 +81,25 @@ object Mp4Repairer {
                     } catch (_: Exception) {
                         // 解析失败则信任 patch 自校验，不额外失败
                     }
-                    // Try overwrite B first
-                    val overwritten = StorageHelper.tryOverwriteOriginal(context, editedUri, tmpOut)
-                    if (overwritten) {
-                        return RepairResult.Success(tmpOut, "overwrite", editedUri, patchResult.oldMoovSize, patchResult.newMoovSize)
+                    // 目标文件名：A 的基名 + _cutfixed，证明是 A 的剪辑版且已修复
+                    val newName = "${displayBaseName(context, originalUri)
+                        ?: displayBaseName(context, editedUri) ?: "clipmeta"}_cutfixed.mp4"
+                    // Try overwrite B first (成功后顺手改名)
+                    val overwrite = StorageHelper.tryOverwriteOriginal(context, editedUri, tmpOut, newName)
+                    if (overwrite.ok) {
+                        return RepairResult.Success(
+                            tmpOut, "overwrite", editedUri,
+                            patchResult.oldMoovSize, patchResult.newMoovSize,
+                            newName, overwrite.renamed
+                        )
                     }
                     // Fallback: insert new entry
-                    val infoB = MediaInfoHelper.query(context, editedUri)
-                    // Derive new name: original name without extension + "_fixed.mp4"
-                    val base = infoB.displayName.removeSuffix(".mp4").removeSuffix(".MP4")
-                    val newName = "${base}_fixed.mp4"
                     val newUri = StorageHelper.insertAsNewEntry(context, tmpOut, newName)
                     if (newUri != null) {
-                        return RepairResult.Success(tmpOut, "insert", newUri, patchResult.oldMoovSize, patchResult.newMoovSize)
+                        return RepairResult.Success(
+                            tmpOut, "insert", newUri,
+                            patchResult.oldMoovSize, patchResult.newMoovSize, newName, true
+                        )
                     }
                     return RepairResult.Failure("无法写入相册：覆盖被拒绝且新建条目失败。请检查存储权限")
                 }

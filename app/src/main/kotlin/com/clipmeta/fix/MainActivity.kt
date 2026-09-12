@@ -415,8 +415,11 @@ fun ClipMetaFixScreen() {
                             lastResult = result
                             status = when (result) {
                                 is RepairResult.Success -> when (result.method) {
-                                    "overwrite" -> "✓ 已原位更新剪辑版 B，请去相册验证时间与定位"
-                                    else -> "✓ 已新建条目 ${result.newUri}，请去相册查看；可手动删除旧 B"
+                                    "overwrite" -> if (result.renamed)
+                                        "✓ 已原位更新并改名为 ${result.newName}，请去相册验证时间与定位"
+                                    else
+                                        "✓ 已原位更新剪辑版 B（改名被系统拒绝，请手动改名），内容已修复，请去相册验证"
+                                    else -> "✓ 已新建条目 ${result.newName ?: result.newUri}，请去相册查看"
                                 }
                                 is RepairResult.Failure -> "✗ 失败: ${result.reason}"
                             }

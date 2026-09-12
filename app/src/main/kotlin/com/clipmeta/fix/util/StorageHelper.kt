@@ -61,13 +61,21 @@ object StorageHelper {
         throw lastError ?: error("Cannot open input stream for $uri")
     }
 
+    /** 原位覆盖结果：字节是否写成功 + 改名是否成功（改名被拒不算失败）。 */
+    data class OverwriteOutcome(val ok: Boolean, val renamed: Boolean)
+
     /**
      * Try to overwrite the original MediaStore entry in-place.
-     * Returns true if succeeds.
      * On Android 10+ this may require user consent / throw SecurityException.
+     * 成功后若给了 newDisplayName，顺手改文件名；改名被拒只记 renamed=false。
      */
-    fun tryOverwriteOriginal(context: Context, targetUri: Uri, patchedFile: File): Boolean {
-        return try {
+    fun tryOverwriteOriginal(
+        context: Context,
+        targetUri: Uri,
+        patchedFile: File,
+        newDisplayName: String? = null
+    ): OverwriteOutcome {
+        try {
             context.contentResolver.openFileDescriptor(targetUri, "w")?.use { pfd ->
                 FileOutputStream(pfd.fileDescriptor).use { out ->
                     FileInputStream(patchedFile).use { input ->
@@ -77,19 +85,23 @@ object StorageHelper {
                         out.fd.sync()
                     }
                 }
-            } ?: return false
-            // Trigger media scan: update date_modified
+            } ?: return OverwriteOutcome(false, false)
+            // Trigger media scan: update date_modified (+ rename when asked)
+            var renamed = false
             try {
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+                    if (newDisplayName != null) put(MediaStore.Video.Media.DISPLAY_NAME, newDisplayName)
                 }
-                context.contentResolver.update(targetUri, values, null, null)
+                if (context.contentResolver.update(targetUri, values, null, null) > 0) {
+                    renamed = newDisplayName != null
+                }
             } catch (_: Exception) {}
-            true
+            return OverwriteOutcome(true, renamed)
         } catch (e: SecurityException) {
-            false
+            return OverwriteOutcome(false, false)
         } catch (e: Exception) {
-            false
+            return OverwriteOutcome(false, false)
         }
     }
 

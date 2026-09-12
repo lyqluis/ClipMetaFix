@@ -18,7 +18,7 @@ mp4engine/    纯Kotlin MP4 解析重写引擎 (可单测)
 
 1. 选择原片 A（显示时间/GPS防呆）
 2. 选择剪辑版 B
-3. 执行修复 -> 原位覆盖 B，失败则新建条目 `*_fixed.mp4` 于 DCIM/Camera
+3. 执行修复 -> 原位覆盖 B（并改名），失败则新建条目于 DCIM/Camera；成品一律命名为 `<原片基名>_cutfixed.mp4`
 
 ## CI
 
