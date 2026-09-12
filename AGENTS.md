@@ -36,6 +36,7 @@
 
 ## Compose gotcha
 - Local `fun`s inside `@Composable` must be declared BEFORE use — forward reference is `Unresolved reference` (bit us in `b457404`). Keep order: state → `onDeleteDone`/`onUriPicked` → launchers → `launchWithFallback`/`launchGalleryForA`/`runDeleteDirect`/`onDeleteClicked` → `permissionLauncher` → `onPickClicked` → UI.
+- Kotlin block comments NEST — never write `/*` inside `/** */` (a `video/*` MIME in a header swallowed the whole file: `Unclosed comment` at EOF + cascading `Unresolved reference`s, fixed in `0a9ebf4`). Put MIME types in `//` comments or rephrase.
 
 ## Testing
 - 12 tests, all synthetic (`Mp4TestHelper.buildSampleA/B`: `ftyp(16 mp42)+mdat+moov(mvhd+udta©xyz+mcvr+meta+trak×2)`). `Mp4PatcherTest` 8: parser locates boxes, moov front+back, legal tree, dates == A, udta ©xyz-no-mcvr, meta == A, mdat unchanged, largesize/size-zero. `Mp4LocationTest` 4: ©xyz parse/skip-mcvr/corrupt.
