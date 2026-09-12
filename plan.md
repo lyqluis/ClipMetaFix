@@ -141,71 +141,90 @@ udta
 5. 验证临时文件：MediaMetadataRetriever 能打开、时长正确、能读到日期与 GPS。
 6. 用验证过的临时文件替换 B（见 §6.3 的存储策略）。
 
-## 5. 技术栈与工程结构
+## 5. 技术栈与工程结构（M1 落地现状）
 
-- 语言：Kotlin；minSdk 26+，target/compile 最新稳定版；单 module 应用 + `mp4engine` 模块（纯 Kotlin/JVM，无 Android 依赖，可独立单元测试）。
+- 语言：Kotlin；`minSdk 26`，`targetSdk/compileSdk 34`；`app`（Android Compose）+ `mp4engine` 模块（纯 Kotlin/JVM，无 Android 依赖，可独立单元测试）。
+- 包名定稿 `com.clipmeta.fix`。
+- 工具链 pin（勿随意升级）：`agp 8.5.2` / `kotlin 1.9.22` / `composeBom 2024.04.01` / `activityCompose 1.8.2` / `Gradle 8.10` / `JDK 17`。
 - 无任何第三方依赖。
-- 版本控制：GitHub **私有仓库**；包名建议 `com.<用户名>.metafix`。
+- 版本控制：GitHub **私有仓库**。
 - CI（GitHub Actions）：
-  - push 到 main → 构建 debug APK → 上传 Artifact
+  - push 到 main → 构建 debug APK（`./gradlew assembleDebug` + `:mp4engine:test`）→ 上传 Artifact
   - 推送 tag `v*` → 构建 release APK（签名信息走 GitHub Secrets）→ 创建 GitHub Release
   - 签名：自用阶段 debug 签名即可；release 签名将 keystore base64 + 密码存 Secrets，workflow 中还原。
+- 注意：`gradle/wrapper/gradle-wrapper.jar` 未入库；本机无工具链时只 push 看 CI，不在本地构建。
 
-建议目录：
+实际目录：
 ```
 repo/
 ├── .github/workflows/
 │   ├── build-debug.yml
 │   └── release.yml
-├── app/                  # UI 与流程编排
+├── app/                  # UI 与流程编排（含 util/ 各通道与存储逻辑）
 ├── mp4engine/            # box 解析/重写引擎（纯 Kotlin + JUnit 测试）
-│   └── src/test/resources/  # 样本 fixture
-└── docs/                 # 本文档与 dump 参考
+├── plan.md / README.md / AGENTS.md
+└── docs/                 # 空（真实样本与 dump 最终未入库，见 §7）
 ```
 
 ## 6. 应用层设计
 
-### 6.1 UI 流程（单 Activity 即可，顺序固定防呆）
+### 6.1 UI 流程（单 Activity 即可，顺序固定防呆；M3 后为三通道）
 
-1. 点「选择原片 A」→ 系统相册选择器（`ActivityResultContracts.PickVisualMedia`）→ 用 MediaMetadataRetriever 显示 A 的摘要：拍摄时间、GPS 坐标、机型。**这是防呆关键，用户肉眼确认没选错。**
-2. 点「选择剪辑版 B」→ 显示 B 的文件名、时长、大小。
+1. 点「选择原片 A」→ **相册直选**（`ACTION_PICK` 对 `MediaStore.Video`，返回真实 MediaStore URI，可读 GPS；备用“文件方式”经 `ACTION_OPEN_DOCUMENT` 直达 DCIM/Camera）→ 显示 A 的摘要：拍摄时间、GPS 坐标、机型、数据来源与诊断小字。**这是防呆关键，用户肉眼确认没选错。**（照片选择器返回的 `content://media/picker/…` 注定无 GPS，已移出 A 通道，见 §6.4。）
+2. 点「选择剪辑版 B」→ 照片选择器或文件方式 → 显示 B 的文件名、时长、大小（B 不需要 GPS）。
 3. 点「执行修复」→ 进度提示（大文件重写需数秒）→ 成功/失败提示。
 4. 成功后提示用户去相册验证。
+5. 成功后可点「删除原文件」（手动 + 二次确认框）：`insert`（新建文件）时删 A + 旧 B；`overwrite`（原位更新，B 即成果）时只删 A，绝不删成果。
 
-### 6.2 元数据读取（展示与验证用）
+### 6.2 元数据读取（展示与验证用，两段式，M3 后定型）
 
 `MediaMetadataRetriever`：METADATA_KEY_DATE（日期）、METADATA_KEY_LOCATION（GPS 字符串）、METADATA_KEY_DURATION。仅用于展示与修复后验证，不参与核心逻辑。
 
+- 第一段用裸 URI 读时长/日期/尺寸（保底，永不回归）；
+- location 为空且 Q+ 时，再用 `requireOriginal` URI 只补 location，失败丢弃；
+- 仍为空则把文件拷到临时区，用 mp4engine 直读 `©xyz` 兜底。
+- 调试小字格式：`©xyz:有/无/meta:有/无/orig:是/否/跳过/perm:有/无/auth:…/src:…/werr:…`，GPS 缺失时让用户完整粘贴。
+
 ### 6.3 存储与替换策略（Android 11+ 作用域存储注意）
 
-- 输入：PickVisualMedia 返回 content Uri，用 ContentResolver.openFileDescriptor 读。
-- 中间产物：app 私有目录临时文件。
-- 替换 B：优先尝试原位更新 B 的 MediaStore 记录（B 是相册创建的，Android 14 上更新他人创建的记录可能被拒——若失败则降级为：写入新 MediaStore 条目（同名，放 DCIM/Camera），由用户手动删除旧 B）。自用场景两种都可接受，实现时先 update、失败 fallback insert。
-- 删除旧文件若走系统确认框，自用可接受。
+- 输入：各通道返回 content Uri，一律先拷到 app 私有目录临时文件再做随机访问（流式 8192 buf，不整块进内存）。
+- 替换 B：优先尝试原位更新 B 的 MediaStore 记录（B 是相册创建的，Android 14 上更新他人创建的记录可能被拒——若失败则降级为：写入新 MediaStore 条目，放 DCIM/Camera）。自用场景两种都可接受，实现时先 update、失败 fallback insert。
+- **命名（两路统一）**：成品一律叫 `<A基名>_cutfixed.mp4`。覆盖分支顺手改 B 的 `DISPLAY_NAME`（被拒则降级提示手动改名，不算失败）；新建分支出新条目。
+- 删除原文件：手动按钮 + 确认框。R+ 用 `MediaStore.createDeleteRequest` 一次弹框批量删；Q29 接 `RecoverableSecurityException` 的 Sender；以下直接删；Document URI 走 `deleteDocument`。删前先把非标准 URI 反查成标准 MediaStore 条目（SIZE→DURATION→名字跨卷查，绝不猜，见 §6.4）；安全规则见 §6.1 第 5 步。
 
-## 7. 单元测试与验收标准
+### 6.4 权限与位置脱敏链（M3 后血泪补记，动之前必读）
 
-fixture：用 M0 的真实样本对（原片 + 剪辑版）作测试资源。
+Manifest 声明：`ACCESS_MEDIA_LOCATION`（GPS 解脱敏）+ `READ_MEDIA_VIDEO`（33+；`READ_EXTERNAL_STORAGE` maxSdk 32、`WRITE_EXTERNAL_STORAGE` maxSdk 28；删除反查全库的前提，单文件授权不够）+ `queries`（`PICK_IMAGES` 与 `PICK`）。
 
-引擎单测断言：
+- 照片选择器 URI（`content://media/picker/…`）GPS 死刑：`setRequireOriginal` 必抛 `UnsupportedOperationException`，裸流即使有权限、不勾“抹去信息”依然脱敏。判定：authority 为 `media` 且路径含 `/picker/`；读侧永远跳过包装。
+- 数字尾段 ≠ 标准条目：picker 尾段也是纯数字。删框（`createDeleteRequest`）验的是完整路径，只认 `content://media/…/<数字id>` 非 picker 形；批量前自检，坏 URI 不进批量。
+- 反查规则：标准形直用；其余按精确 `SIZE` → `DURATION ±2s` 缩圈 → `DISPLAY_NAME` 跨卷查；多行并列一律放弃。宽泛读权限缺失时全库查询返回空游标（不抛异常），删前必须先 gate 权限、通过后自动继续。
+
+## 7. 单元测试与验收标准（M2 落地现状）
+
+fixture：真实样本最终未入库。现行 12 个全合成测试（`Mp4TestHelper.buildSampleA/B`：`ftyp(16 mp42)+mdat+moov(mvhd+udta©xyz+mcvr+meta+trak×2)`），`mp4engine/src/test/resources` 与 `docs/` 为空，不要声称有真实 fixture。
+
+引擎单测断言（`Mp4PatcherTest` 8 + `Mp4LocationTest` 4）：
 1. 解析器正确定位所有 box（moov 位置前后两种布局都测）。
 2. 输出文件 box 树合法（可解析、size 自洽）。
 3. 输出 mvhd/tkhd/mdhd 的日期字节 == A 的对应字节。
 4. 输出 udta 含 ©xyz、不含 mcvr。
 5. 输出 meta == A 的 meta 字节级一致。
 6. 输出 mdat 与 B 的 mdat 字节级一致（流未动）。
-7. MediaMetadataRetriever 能读出正确日期与 location。
+7. largesize / size==0 与 ©xyz 解析/跳 mcvr/容错（合成覆盖）。
+8. `MediaMetadataRetriever` 的读回校验只在真机做（JVM 单测无此能力）。
 
 端到端验收（真机）：
 1. 处理一个真实剪辑视频 → 小米相册中时间线排在拍摄当天、详情页有定位、可正常播放。
 2. 输出与 exiftool 修复版 dump 语义一致。
 
-## 8. 实施顺序（里程碑）
+## 8. 实施顺序（里程碑；M1–M4 已完成）
 
-1. **M1 骨架**：工程 + CI，空 UI，push 出可安装 APK。
-2. **M2 引擎**：mp4engine 解析/重写 + 全部单测（核心工作量）。
-3. **M3 流程**：UI + 执行流程 + 存储替换 + 真机验收。
-4. **M4 打磨**：失败回滚、边界报错（非 MP4 明确提示）、可选的读回校验增强。
+1. **M1 骨架**：工程 + CI，空 UI，push 出可安装 APK。✅
+2. **M2 引擎**：mp4engine 解析/重写 + 全部单测（核心工作量）。✅
+3. **M3 流程**：UI + 执行流程 + 存储替换 + 真机验收。✅
+4. **M4 打磨**：失败回滚、边界报错（非 MP4 明确提示）、可选的读回校验增强。✅（基础项完成）
+5. **M5 实战迭代**（真机澎湃OS 连续踩坑后追加）：A 主通道切相册直选（picker 通道 GPS 不可达）→ 两段式读取 + `requireOriginal` → 诊断小字 → 文件通道直达 DCIM/Camera → 修复后删除（确认框 + 安全规则）→ 成品统一命名 `<A基名>_cutfixed.mp4`。✅
 
 ## 9. 风险与注意事项清单
 
@@ -216,7 +235,11 @@ fixture：用 M0 的真实样本对（原片 + 剪辑版）作测试资源。
 5. ©xyz 的 © 是 0xA9，按字节比较。
 6. 大文件全程流式，mdat 通道拷贝。
 7. 临时文件验证通过前不得触碰 B。
-8. 第二组样本（不同地点、普通竖屏直出）尚未验证——非阻塞，M3 期间顺手补测，若丢失模式不一致需复核字段清单。
+8. 第二组样本（不同地点、普通竖屏直出）尚未验证——非阻塞，后续顺手补测，若丢失模式不一致需复核字段清单。
+9. `@Composable` 内局部函数必须先声明后使用（向前引用即 `Unresolved reference`）；函数声明顺序：state → 回调/launchers → 业务 fun → permissionLauncher → onPickClicked → UI。
+10. Kotlin 模板字符串中变量后紧跟中文会被吞成标识符（如 `"$label归一命中"`），一律写 `${label}` 花括号定界。
+11. 读 `MediaStore.Video` 全库反查必须先持有宽泛读权限；无权限时本机 ROM 返回空游标而不抛异常——删前 gate，不足则申请、通过后自动继续。
+12. 覆盖分支 B 即成果：删除只删 A；改名被拒不算失败（字节已修好），文案降级提示手动改名。
 
 ## 10. 参考：exiftool 验证命令
 
@@ -231,7 +254,7 @@ exiftool -TagsFromFile A.mp4 "-all:all" B.mp4
 
 ---
 
-两份建议，让新对话产出更稳：
+两份建议的后续（M2 后记）：
 
-1. **把样本文件也准备好**：新对话写单测需要 fixture，建议把原片和剪辑版样本（可脱敏）放到仓库 `mp4engine/src/test/resources/`，并在对话里说明路径。dump 文件（raw.txt、cut.txt、raw_v3.txt）放进 `docs/` 供随时比对。
-2. **开工顺序建议**：让新对话先做 M2 的 mp4engine（纯 Kotlin 模块，不依赖 Android，本地就能跑单测验证核心逻辑），再做 M1 骨架和 M3 UI——核心引擎先用单测验证，比在 Android 上调试快得多。
+1. 真实样本与 dump 最终**未入库**（`test/resources`、`docs/` 至今为空）：现行单测全部合成（`Mp4TestHelper`），真机用 `VID_20260908_xxxxxx` 样本对直接验收。若后续要补，仍按原路径放。
+2. 本仓库真实约束与当初建议不同：**本机无工具链**（`java`/`gradle` 均无），不要在本地构建——push 到 `main` 看 CI；拿 CI 日志只看 `:app:compileDebugKotlin` 块里的 `e: <file>:<line>` 行。开发期行为以 `AGENTS.md` 为准（命令、通道、诊断格式的唯一口径）。
