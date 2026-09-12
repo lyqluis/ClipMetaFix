@@ -234,15 +234,13 @@ fun ClipMetaFixScreen() {
             status = "没有可删的文件"
             return
         }
-        val (deletable, undeletable) = targets.partition { com.clipmeta.fix.util.MediaDeleter.isDeletable(it) }
-        if (undeletable.isNotEmpty()) {
-            status = "照片选择器返回的临时条目无法删除，请在相册手动处理；其余继续"
-        }
-        if (deletable.isEmpty()) return
-        // 归一化成标准 MediaStore 条目 URI（删框只认这种）；回映射留着清状态用
+        // 先逐个归一化成标准条目 URI（含 picker 会话 URI，一视同仁反查）；
+        // 归一命中的进删除流，miss 的才进手动提示。回映射留着清状态用。
         deleteBackMap.clear()
         val resolveNotes = mutableListOf<String>()
-        val resolved = deletable.map { u ->
+        val resolved = mutableListOf<Uri>()
+        val unresolvable = mutableListOf<String>()
+        for (u in targets) {
             val info = if (u == originalUri) originalInfo else if (u == editedUri) editedInfo else null
             val label = if (u == originalUri) "A" else if (u == editedUri) "B" else "?"
             when (val out = com.clipmeta.fix.util.MediaDeleter.resolveForDelete(
@@ -251,15 +249,25 @@ fun ClipMetaFixScreen() {
                 is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Hit -> {
                     if (out.uri != u) resolveNotes.add("${label}归一命中")
                     deleteBackMap[out.uri] = u
-                    out.uri
+                    resolved.add(out.uri)
                 }
                 is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Miss -> {
                     resolveNotes.add("${label}反查miss(${out.reason})")
-                    deleteBackMap[u] = u
-                    u
+                    // Document URI 反查 miss 也值得直试 deleteDocument（有持久化授权常能成）；
+                    // picker 会话 URI 直试必败，进手动。
+                    if (com.clipmeta.fix.util.MediaDeleter.isDocumentUri(u)) {
+                        deleteBackMap[u] = u
+                        resolved.add(u)
+                    } else {
+                        unresolvable.add("$label（反查不到请在相册手动删）")
+                    }
                 }
             }
         }
+        if (unresolvable.isNotEmpty()) {
+            status = "${unresolvable.joinToString("；")}需在相册手动处理；其余继续"
+        }
+        if (resolved.isEmpty()) return
         fun toOriginal(u: Uri): Uri = deleteBackMap[u] ?: u
         scope.launch {
             val deleted = mutableListOf<Uri>()

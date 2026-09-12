@@ -13,10 +13,9 @@ import android.provider.MediaStore
  * - API < 29：直接 resolver.delete。
  * - API 29：直接删，抓 RecoverableSecurityException 取授权 IntentSender 抛给调用方弹系统框。
  * - API 30+：MediaStore.createDeleteRequest 一次弹框批量删（系统托管确认）。
- * - Document URI：DocumentsContract.deleteDocument。
- * - 照片选择器会话 URI（content://media/picker/...）：删不动，如实返回失败。
- *
- * 所有单条失败都不抛异常，记进 DeleteOutcome，由 UI 展示。
+ * - Document URI：DocumentsContract.deleteDocument（反查 miss 也直试）。
+ * - 照片选择器会话 URI（content://media/picker/...）：本身不可删，
+ *   但先按大小/名字反查背后真实条目，查中即可删；查不中才报手动。
  */
 object MediaDeleter {
 
@@ -40,7 +39,8 @@ object MediaDeleter {
 
     /**
      * 构造删除所需的系统授权 IntentSender（API 30+ 批量）。
-     * picker 会话 URI 无法删除，调用方应先用 [isDeletable] 过滤并提示。
+     * 入参必须全是标准 MediaStore 条目 URI（先走 resolveForDelete 归一化），
+     * 否则抛 IllegalArgumentException（all requested items must be referenced by specific id）。
      */
     fun buildDeleteRequest(context: Context, uris: List<Uri>): DeleteRequest {
         if (uris.isEmpty()) return DeleteRequest.Failed("空列表")
@@ -57,9 +57,6 @@ object MediaDeleter {
         val msg = (e.message ?: "").replace(Regex("\\s+"), " ").take(100)
         return e.javaClass.simpleName + (if (msg.isBlank()) "" else ":$msg")
     }
-
-    /** picker 会话 URI 不可删；其余尝试直接删。 */
-    fun isDeletable(uri: Uri): Boolean = !UriRequireOriginal.isPickerUri(uri)
 
     /** 删除反查要用的宽泛读权限名（33+ 细分 VIDEO，以下沿用 EXTERNAL_STORAGE）。 */
     fun broadReadPermissionName(): String =
@@ -95,8 +92,9 @@ object MediaDeleter {
 
     /**
      * 把各类 URI 归一化成标准 MediaStore 条目 URI（供删框用）。
-     * 已是标准形则 Hit 原样返回；自家 Gallery 等非标准形先按 SIZE（+DURATION）跨卷反查，
-     * 再按 DISPLAY_NAME 反查；查不到给 Miss（调用方用原 URI 硬试，失败进手动提示）。
+     * 已是标准形则 Hit 原样返回；其余（含照片选择器会话 URI）一律按 SIZE（+DURATION）
+     * 跨卷反查，再按 DISPLAY_NAME 反查；查不到给 Miss（调用方进手动提示）。
+     * 注意：会话 URI 背后多半有真实条目（如本地视频），不要未查先判死刑。
      */
     fun resolveForDelete(
         context: Context,
@@ -106,7 +104,6 @@ object MediaDeleter {
         durationMs: Long? = null
     ): ResolveOutcome {
         if (isStandardMediaItem(uri)) return ResolveOutcome.Hit(uri)
-        if (UriRequireOriginal.isPickerUri(uri)) return ResolveOutcome.Miss("picker会话无条目")
         return findMediaStoreItem(context, displayName, sizeBytes, durationMs)
     }
 
