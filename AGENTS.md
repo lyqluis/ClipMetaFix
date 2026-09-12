@@ -8,7 +8,7 @@
 
 ## Structure
 - `settings.gradle.kts` — `FAIL_ON_PROJECT_REPOS`, catalog `gradle/libs.versions.toml`; do not add `repositories {}` in subprojects.
-- `:app` — Android Compose app `com.clipmeta.fix` (`compileSdk 34`, `minSdk 26`, `targetSdk 34`), depends `project(":mp4engine")`. Single `MainActivity`, `lightColorScheme()`; `isMinifyEnabled false` despite `-keep class com.clipmeta.fix.mp4.**`.
+- `:app` — Android Compose app `com.clipmeta.fix` (`compileSdk 34`, `minSdk 26`, `targetSdk 34`), depends `project(":mp4engine")`. Single `MainActivity`, theme `ClipMetaFixTheme` (not inline `lightColorScheme()`); `isMinifyEnabled false` despite `-keep class com.clipmeta.fix.mp4.**`.
 - `:mp4engine` — pure JVM `kotlin.jvm` + `jvmToolchain(17)`, only `junit:junit:4.13.2`; no Android deps. Files: `Box.kt` / `Mp4Parser.kt` / `Mp4Patcher.kt` / `XyzLocation.kt`.
 - `app/.../util/`: `PickVideoViaGallery.kt` holds `PickVideoViaGallery` (A primary) + `PickVideoViaFiles` (OpenDocument seeded to DCIM/Camera) + shared `parseSingleVideoResult` / `PickVideoWithLocation` (photo-picker + location extra) / `SharedVideoReceiver` (SEND/SEND_MULTIPLE extract + GPS>duration classify) / `UriRequireOriginal` / `MediaInfoHelper` (`query` private) / `StorageHelper` / `Mp4Repairer` / `MediaDeleter`.
 - UI state: `MainActivity.Slot` (uri/info/loading per A/B) + `SlotStatus`; theme in `ui/theme/Theme.kt` (system dark + dynamic color); `Scaffold`+`TopAppBar` shell.
@@ -36,7 +36,7 @@
 - Patch is byte-copy: `mvhd/tkhd/mdhd` creation+modification (8B v0 / 16B v1), `udta` filtered (keep `©xyz`, drop `mcvr`), `moov.meta` full replace; `ftyp`/`mdat`/stbl untouched; discard `mcvr` (~0.5 MB).
 
 ## Compose gotcha
-- Local `fun`s inside `@Composable` must be declared BEFORE use — forward reference is `Unresolved reference` (bit us in `b457404`). Keep order: state → `onDeleteDone`/`onUriPicked` → launchers → `launchWithFallback`/`launchGalleryForA`/`runDeleteDirect`/`onDeleteClicked` → `permissionLauncher` → `onPickClicked` → UI.
+- Local `fun`s inside `@Composable` must be declared BEFORE use — forward reference is `Unresolved reference` (bit us in `b457404`). Keep order: `slotA/slotB`+`slotOf` → `onDeleteDone`/`onUriPicked` → `swapAB`/`handleSharedUris` → `persistRead` → launchers → `launchWithFallback`/`pickDocFor`/`launchGalleryForA` → `proceedDelete`/`onDeleteClicked` → `permissionLauncher` → `onPickClicked` → inbox/`LaunchedEffect` → UI.
 - Kotlin block comments NEST — never write `/*` inside `/** */` (a `video/*` MIME in a header swallowed the whole file: `Unclosed comment` at EOF + cascading `Unresolved reference`s, fixed in `0a9ebf4`). Put MIME types in `//` comments or rephrase.
 
 ## Testing

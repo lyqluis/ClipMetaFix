@@ -237,7 +237,7 @@ fixture：真实样本最终未入库。现行 12 个全合成测试（`Mp4TestH
 6. 大文件全程流式，mdat 通道拷贝。
 7. 临时文件验证通过前不得触碰 B。
 8. 第二组样本（不同地点、普通竖屏直出）尚未验证——非阻塞，后续顺手补测，若丢失模式不一致需复核字段清单。
-9. `@Composable` 内局部函数必须先声明后使用（向前引用即 `Unresolved reference`）；函数声明顺序：state → 回调/launchers → 业务 fun → permissionLauncher → onPickClicked → UI。
+9. `@Composable` 内局部函数必须先声明后使用（向前引用即 `Unresolved reference`）；函数声明顺序：`slotA/slotB`+`slotOf` → `onDeleteDone`/`onUriPicked` → `swapAB`/`handleSharedUris` → `persistRead` → launchers → `launchWithFallback`/`pickDocFor`/`launchGalleryForA` → `proceedDelete`/`onDeleteClicked` → `permissionLauncher` → `onPickClicked` → 收件箱消费 → UI（`Scaffold`+`SlotStatus`+`InfoBlock`；主题在 `ui/theme/Theme.kt`）。
 10. Kotlin 模板字符串中变量后紧跟中文会被吞成标识符（如 `"$label归一命中"`），一律写 `${label}` 花括号定界。
 11. 读 `MediaStore.Video` 全库反查必须先持有宽泛读权限；无权限时本机 ROM 返回空游标而不抛异常——删前 gate，不足则申请、通过后自动继续。
 12. 覆盖分支 B 即成果：删除只删 A；改名被拒不算失败（字节已修好），文案降级提示手动改名。
