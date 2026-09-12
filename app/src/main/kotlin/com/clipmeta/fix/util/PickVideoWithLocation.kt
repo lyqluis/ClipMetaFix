@@ -1,7 +1,5 @@
 package com.clipmeta.fix.util
 
-import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -53,15 +51,9 @@ class PickVideoWithLocation : ActivityResultContract<Unit, Uri?>() {
         return createBaseIntent()
     }
 
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
-        if (resultCode != Activity.RESULT_OK) return null
-        if (intent == null) return null
-        // 单选时 data 有值；部分实现放在 ClipData 里
-        intent.data?.let { return it }
-        val clip = intent.clipData ?: return null
-        if (clip.itemCount > 0) return clip.getItemAt(0).uri
-        return null
-    }
+    // 单选时 data 有值；部分实现放在 ClipData 里（与 Gallery/Files 共用解析）
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        parseSingleVideoResult(resultCode, intent)
 }
 
 /** Q+ 才需要位置权限；Q 以下直接返回 true（无脱敏机制）。 */
@@ -73,6 +65,4 @@ fun hasMediaLocationPermission(context: Context): Boolean {
     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 }
 
-/** 启动带位置的选择器，失败时抛 ActivityNotFoundException 由调用方 fallback。 */
-@Throws(ActivityNotFoundException::class)
-fun buildLocationPickerIntent(): Intent = PickVideoWithLocation.createBaseIntent()
+

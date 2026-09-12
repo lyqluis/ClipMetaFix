@@ -22,7 +22,7 @@ data class VideoInfo(
 
 object MediaInfoHelper {
 
-    fun query(context: Context, uri: Uri): VideoInfo {
+    private fun query(context: Context, uri: Uri): VideoInfo {
         val resolver = context.contentResolver
         var name = "unknown.mp4"
         var size: Long = -1

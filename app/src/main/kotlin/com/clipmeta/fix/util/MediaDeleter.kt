@@ -19,12 +19,6 @@ import android.provider.MediaStore
  */
 object MediaDeleter {
 
-    data class DeleteOutcome(
-        val uri: Uri,
-        val ok: Boolean,
-        val reason: String? = null
-    )
-
     /** 是否 DocumentProvider 的 URI。 */
     fun isDocumentUri(uri: Uri): Boolean =
         uri.authority?.endsWith(".documents") == true ||

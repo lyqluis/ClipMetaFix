@@ -10,7 +10,8 @@
 - `settings.gradle.kts` — `FAIL_ON_PROJECT_REPOS`, catalog `gradle/libs.versions.toml`; do not add `repositories {}` in subprojects.
 - `:app` — Android Compose app `com.clipmeta.fix` (`compileSdk 34`, `minSdk 26`, `targetSdk 34`), depends `project(":mp4engine")`. Single `MainActivity`, `lightColorScheme()`; `isMinifyEnabled false` despite `-keep class com.clipmeta.fix.mp4.**`.
 - `:mp4engine` — pure JVM `kotlin.jvm` + `jvmToolchain(17)`, only `junit:junit:4.13.2`; no Android deps. Files: `Box.kt` / `Mp4Parser.kt` / `Mp4Patcher.kt` / `XyzLocation.kt`.
-- `app/.../util/`: `PickVideoViaGallery` (A primary) / `PickVideoWithLocation` (photo-picker + location extra) / `PickVideoViaFiles` (OpenDocument seeded to DCIM/Camera) / `SharedVideoReceiver` (SEND/SEND_MULTIPLE extract + GPS>duration classify) / `UriRequireOriginal` / `MediaInfoHelper` / `StorageHelper` / `Mp4Repairer` / `MediaDeleter`.
+- `app/.../util/`: `PickVideoViaGallery.kt` holds `PickVideoViaGallery` (A primary) + `PickVideoViaFiles` (OpenDocument seeded to DCIM/Camera) + shared `parseSingleVideoResult` / `PickVideoWithLocation` (photo-picker + location extra) / `SharedVideoReceiver` (SEND/SEND_MULTIPLE extract + GPS>duration classify) / `UriRequireOriginal` / `MediaInfoHelper` (`query` private) / `StorageHelper` / `Mp4Repairer` / `MediaDeleter`.
+- UI state: `MainActivity.Slot` (uri/info/loading per A/B) + `SlotStatus`; theme in `ui/theme/Theme.kt` (system dark + dynamic color); `Scaffold`+`TopAppBar` shell.
 - Share entry: `singleTop` + `SEND`/`SEND_MULTIPLE` `video/*` filters; Activity `sharedInbox` consumed once via `takeInbox` in `LaunchedEffect`; `handleSharedUris` reuses `onUriPicked`-grade `queryWithGps` then slots directly; swap button (`swapAB`) visible when both set, clears `lastResult`.
 - `.github/workflows` — only `build-debug.yml` and `release.yml` (see Commands for their exact commands).
 

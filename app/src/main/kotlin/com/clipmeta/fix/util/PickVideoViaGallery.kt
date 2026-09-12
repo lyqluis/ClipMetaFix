@@ -38,14 +38,18 @@ class PickVideoViaGallery : ActivityResultContract<Unit, Uri?>() {
 
     override fun createIntent(context: Context, input: Unit): Intent = createBaseIntent()
 
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
-        if (resultCode != Activity.RESULT_OK) return null
-        if (intent == null) return null
-        intent.data?.let { return it }
-        val clip = intent.clipData ?: return null
-        if (clip.itemCount > 0) return clip.getItemAt(0).uri
-        return null
-    }
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        parseSingleVideoResult(resultCode, intent)
+}
+
+/** 三个单选视频 contract 共用：data 优先，否则取 clipData 第一个。 */
+fun parseSingleVideoResult(resultCode: Int, intent: Intent?): Uri? {
+    if (resultCode != Activity.RESULT_OK) return null
+    if (intent == null) return null
+    intent.data?.let { return it }
+    val clip = intent.clipData ?: return null
+    if (clip.itemCount > 0) return clip.getItemAt(0).uri
+    return null
 }
 
 /**
@@ -76,12 +80,6 @@ class PickVideoViaFiles : ActivityResultContract<Unit, Uri?>() {
 
     override fun createIntent(context: Context, input: Unit): Intent = createBaseIntent()
 
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
-        if (resultCode != Activity.RESULT_OK) return null
-        if (intent == null) return null
-        intent.data?.let { return it }
-        val clip = intent.clipData ?: return null
-        if (clip.itemCount > 0) return clip.getItemAt(0).uri
-        return null
-    }
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        parseSingleVideoResult(resultCode, intent)
 }

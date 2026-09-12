@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.clipmeta.fix.ui.theme.ClipMetaFixTheme
 import com.clipmeta.fix.util.MediaInfoHelper
 import com.clipmeta.fix.util.Mp4Repairer
 import com.clipmeta.fix.util.PickVideoViaFiles
@@ -55,7 +56,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         absorbShare(intent)
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme()) {
+            ClipMetaFixTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     ClipMetaFixScreen()
                 }
@@ -70,15 +71,28 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * A/B 槽：uri + 摘要 + 加载态放一起，落槽/交换整体搬运，不再逐字段复制。
+ * 字段各自是 state，单字段变更照常触发重组（与六个独立 state 等价）。
+ */
+class Slot {
+    var uri by mutableStateOf<Uri?>(null)
+    var info by mutableStateOf<VideoInfo?>(null)
+    var loading by mutableStateOf(false)
+
+    fun clear() {
+        uri = null
+        info = null
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ClipMetaFixScreen() {
     val context = LocalContext.current
-    var originalUri by remember { mutableStateOf<Uri?>(null) }
-    var editedUri by remember { mutableStateOf<Uri?>(null) }
-    var originalInfo by remember { mutableStateOf<VideoInfo?>(null) }
-    var editedInfo by remember { mutableStateOf<VideoInfo?>(null) }
-    var originalLoading by remember { mutableStateOf(false) }
-    var editedLoading by remember { mutableStateOf(false) }
+    val slotA = remember { Slot() }
+    val slotB = remember { Slot() }
+    fun slotOf(target: String): Slot = if (target == "A") slotA else slotB
     var status by remember { mutableStateOf<String?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
     var lastResult by remember { mutableStateOf<RepairResult?>(null) }
@@ -93,57 +107,43 @@ fun ClipMetaFixScreen() {
 
     fun onDeleteDone(targets: List<Uri>, clearResult: Boolean = true) {
         for (u in targets) com.clipmeta.fix.util.MediaDeleter.releasePersistable(context, u)
-        if (originalUri in targets) {
-            originalUri = null
-            originalInfo = null
-        }
-        if (editedUri in targets) {
-            editedUri = null
-            editedInfo = null
-        }
+        if (slotA.uri in targets) slotA.clear()
+        if (slotB.uri in targets) slotB.clear()
         if (clearResult) lastResult = null
     }
 
     fun onUriPicked(target: String, uri: Uri) {
-        if (target == "A") {
-            originalUri = uri
-            originalLoading = true
-            originalInfo = null
-            scope.launch {
-                val info = withContext(Dispatchers.IO) { MediaInfoHelper.queryWithGps(context, uri) }
-                originalInfo = info
-                originalLoading = false
+        val slot = slotOf(target)
+        slot.uri = uri
+        slot.loading = true
+        slot.info = null
+        scope.launch {
+            val info = withContext(Dispatchers.IO) { MediaInfoHelper.queryWithGps(context, uri) }
+            slot.info = info
+            slot.loading = false
+            // 只有 A 强依赖 GPS：空则告警，有则顺手清掉旧告警；B 不管 GPS
+            if (target == "A") {
                 if (info.location.isNullOrBlank()) {
                     status = "A 的 GPS 为空：请确认已授予位置权限，并在选择器中勾选“保留定位/相机数据”后重新选择"
-                } else {
-                    if (status?.startsWith("A 的 GPS") == true) status = null
+                } else if (status?.startsWith("A 的 GPS") == true) {
+                    status = null
                 }
-                lastResult = null
             }
-        } else {
-            editedUri = uri
-            editedLoading = true
-            editedInfo = null
-            scope.launch {
-                val info = withContext(Dispatchers.IO) { MediaInfoHelper.queryWithGps(context, uri) }
-                editedInfo = info
-                editedLoading = false
-                lastResult = null
-            }
+            lastResult = null
         }
     }
 
     /** 交换 A/B（含摘要与加载态；旧修复结果作废，避免删错）。 */
     fun swapAB() {
-        val tu = originalUri
-        val ti = originalInfo
-        val tl = originalLoading
-        originalUri = editedUri
-        originalInfo = editedInfo
-        originalLoading = editedLoading
-        editedUri = tu
-        editedInfo = ti
-        editedLoading = tl
+        val tu = slotA.uri
+        val ti = slotA.info
+        val tl = slotA.loading
+        slotA.uri = slotB.uri
+        slotA.info = slotB.info
+        slotA.loading = slotB.loading
+        slotB.uri = tu
+        slotB.info = ti
+        slotB.loading = tl
         lastResult = null
         status = "已交换 A/B，请核对时间与 GPS 后再执行修复"
     }
@@ -174,14 +174,14 @@ fun ClipMetaFixScreen() {
             val aInfo = infos.firstOrNull { it.first == assignment.a }
             val bInfo = infos.firstOrNull { it.first == assignment.b }
             if (aInfo != null) {
-                originalUri = aInfo.first
-                originalInfo = aInfo.second
-                originalLoading = false
+                slotA.uri = aInfo.first
+                slotA.info = aInfo.second
+                slotA.loading = false
             }
             if (bInfo != null) {
-                editedUri = bInfo.first
-                editedInfo = bInfo.second
-                editedLoading = false
+                slotB.uri = bInfo.first
+                slotB.info = bInfo.second
+                slotB.loading = false
             }
             lastResult = null
             val aName = aInfo?.second?.displayName
@@ -196,98 +196,69 @@ fun ClipMetaFixScreen() {
         }
     }
 
-    // 带位置授权的新选择器（首选）
-    val pickOriginalLocation =
+    // 跨进程/跨重启仍可读：拿持久化读授权，失败吞掉（单次授权照常用）
+    fun persistRead(uri: Uri) {
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: Exception) {}
+    }
+
+    // 带位置授权的新选择器（首选；A/B 共用，目标看 pendingTarget）
+    val pickLocation =
         rememberLauncherForActivityResult(PickVideoWithLocation()) { uri ->
-            if (uri != null) onUriPicked("A", uri)
-            pendingTarget = null
-        }
-    val pickEditedLocation =
-        rememberLauncherForActivityResult(PickVideoWithLocation()) { uri ->
-            if (uri != null) onUriPicked("B", uri)
+            val t = pendingTarget?.takeIf { it == "A" || it == "B" }
+            if (uri != null && t != null) onUriPicked(t, uri)
             pendingTarget = null
         }
     // 老选择器 fallback（无 ACTION_PICK_IMAGES 的机型）
-    val pickOriginalFallback =
+    val pickFallback =
         rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            if (uri != null) {
-                status = "当前机型不支持位置授权选择器，已用兼容模式打开；若 GPS 为空请改用系统相册选择"
-                onUriPicked("A", uri)
+            val t = pendingTarget?.takeIf { it == "A" || it == "B" }
+            if (uri != null && t != null) {
+                if (t == "A") status = "当前机型不支持位置授权选择器，已用兼容模式打开；若 GPS 为空请改用系统相册选择"
+                onUriPicked(t, uri)
             }
-            pendingTarget = null
-        }
-    val pickEditedFallback =
-        rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            if (uri != null) onUriPicked("B", uri)
             pendingTarget = null
         }
     // 相册直选（A 的主通道）：返回真实 MediaStore URI，可读原始字节（含 GPS）。
     // 照片选择器（content://media/picker/...）不支持 requireOriginal，注定无 GPS，
     // 因此 A 默认走这里；无 Gallery 机型回退到位置授权选择器。
-    val pickOriginalGallery =
+    val pickGallery =
         rememberLauncherForActivityResult(PickVideoViaGallery()) { uri ->
             if (uri != null) {
-                try {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                } catch (_: Exception) {}
+                persistRead(uri)
                 onUriPicked("A", uri)
             }
             pendingTarget = null
         }
     // 文件管理器直选（备用通道）：初始定位 DCIM/Camera，走 DocumentsProvider 管道。
-    val pickOriginalDoc =
+    val pickDoc =
         rememberLauncherForActivityResult(PickVideoViaFiles()) { uri ->
-            if (uri != null) {
-                try {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                } catch (_: Exception) {}
-                onUriPicked("A", uri)
-            }
-            pendingTarget = null
-        }
-    val pickEditedDoc =
-        rememberLauncherForActivityResult(PickVideoViaFiles()) { uri ->
-            if (uri != null) {
-                try {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                } catch (_: Exception) {}
-                onUriPicked("B", uri)
+            val t = pendingTarget?.takeIf { it == "A" || it == "B" }
+            if (uri != null && t != null) {
+                persistRead(uri)
+                onUriPicked(t, uri)
             }
             pendingTarget = null
         }
 
     fun launchWithFallback(target: String) {
+        pendingTarget = target
         try {
             if (!PickVideoWithLocation.isAvailable(context)) throw ActivityNotFoundException()
-            if (target == "A") pickOriginalLocation.launch(Unit)
-            else pickEditedLocation.launch(Unit)
-        } catch (_: ActivityNotFoundException) {
-            if (target == "A") {
-                pickOriginalFallback.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                )
-            } else {
-                pickEditedFallback.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                )
-            }
+            pickLocation.launch(Unit)
         } catch (_: Exception) {
-            if (target == "A") {
-                pickOriginalFallback.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                )
-            } else {
-                pickEditedFallback.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-                )
-            }
+            pickFallback.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+            )
         }
+    }
+
+    fun pickDocFor(target: String) {
+        pendingTarget = target
+        pickDoc.launch(Unit)
     }
 
     // 删除系统授权回调：用户点了允许即视为删框内条目删完，清状态；取消则只清已直删的。
@@ -315,8 +286,8 @@ fun ClipMetaFixScreen() {
     fun proceedDelete() {
         val r = lastResult as? RepairResult.Success ?: return
         val targets = mutableListOf<Uri>()
-        originalUri?.let { targets.add(it) }
-        if (r.method != "overwrite") editedUri?.let { targets.add(it) }
+        slotA.uri?.let { targets.add(it) }
+        if (r.method != "overwrite") slotB.uri?.let { targets.add(it) }
         if (targets.isEmpty()) {
             status = "没有可删的文件"
             return
@@ -328,8 +299,8 @@ fun ClipMetaFixScreen() {
         val resolved = mutableListOf<Uri>()
         val unresolvable = mutableListOf<String>()
         for (u in targets) {
-            val info = if (u == originalUri) originalInfo else if (u == editedUri) editedInfo else null
-            val label = if (u == originalUri) "A" else if (u == editedUri) "B" else "?"
+            val info = if (u == slotA.uri) slotA.info else if (u == slotB.uri) slotB.info else null
+            val label = if (u == slotA.uri) "A" else if (u == slotB.uri) "B" else "?"
             when (val out = com.clipmeta.fix.util.MediaDeleter.resolveForDelete(
                 context, u, info?.displayName, info?.sizeBytes ?: -1, info?.durationMs
             )) {
@@ -430,7 +401,7 @@ fun ClipMetaFixScreen() {
                 val hint = (resolveNotes + errHints + listOf("mperm:$mperm")).distinct().take(4).joinToString("；")
                 val shapes = leftover.map { d ->
                     val o = toOriginal(d)
-                    val label = if (o == originalUri) "A" else if (o == editedUri) "B" else "?"
+                    val label = if (o == slotA.uri) "A" else if (o == slotB.uri) "B" else "?"
                     val skip = if (d in manualOnly) "跳过删框" else null
                     "$label(${com.clipmeta.fix.util.MediaDeleter.uriShape(d)}${skip?.let { ";$it" } ?: ""})"
                 }.joinToString("；")
@@ -473,7 +444,7 @@ fun ClipMetaFixScreen() {
         try {
             if (!PickVideoViaGallery.isAvailable(context)) throw ActivityNotFoundException()
             pendingTarget = "A"
-            pickOriginalGallery.launch(Unit)
+            pickGallery.launch(Unit)
         } catch (_: Exception) {
             launchWithFallback("A")
         }
@@ -483,9 +454,9 @@ fun ClipMetaFixScreen() {
     val permissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             locGranted = granted
+            // permissionLauncher 只在选 A 时弹出，pendingTarget 只可能是 A 系
             when (pendingTarget) {
                 "A", "A-gallery" -> launchGalleryForA()
-                "B" -> launchWithFallback("B")
             }
             if (!granted && pendingTarget == "A") {
                 status = "未授予位置权限：选到的视频 GPS 将为空，可继续但修出来也没有定位"
@@ -501,7 +472,6 @@ fun ClipMetaFixScreen() {
         } else if (target == "A") {
             launchGalleryForA()
         } else {
-            pendingTarget = target
             launchWithFallback(target)
         }
     }
@@ -516,11 +486,13 @@ fun ClipMetaFixScreen() {
         }
     }
 
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("ClipMetaFix") }) }
+    ) { innerPadding ->
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(innerPadding).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("ClipMetaFix", style = MaterialTheme.typography.headlineSmall)
         Text(
             "解决澎湃OS剪辑后丢失 GPS/拍摄时间的工具。按顺序选择 原片A 与 剪辑版B，执行修复；也可从相册直接分享 1~2 个视频过来自动识别。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -547,24 +519,15 @@ fun ClipMetaFixScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onPickClicked("A") }) {
+                    FilledTonalButton(onClick = { onPickClicked("A") }) {
                         Text("选择原片 A")
                     }
-                    OutlinedButton(onClick = { pickOriginalDoc.launch(Unit) }) {
+                    OutlinedButton(onClick = { pickDocFor("A") }) {
                         Text("文件方式选 A")
                     }
                 }
 
-                when {
-                    originalLoading -> {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text("读取中… 大文件需数秒", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    originalInfo != null -> InfoBlock(originalInfo!!, isOriginal = true)
-                    else -> Text("未选择", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
+                SlotStatus(slotA, isOriginal = true, loadingText = "读取中… 大文件需数秒")
             }
         }
 
@@ -574,23 +537,14 @@ fun ClipMetaFixScreen() {
                 Text("2. 选择剪辑版 B", style = MaterialTheme.typography.titleMedium)
                 Text("相册剪辑后导出的新视频（丢失元数据）", style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onPickClicked("B") }) {
+                    FilledTonalButton(onClick = { onPickClicked("B") }) {
                         Text("选择剪辑版 B")
                     }
-                    OutlinedButton(onClick = { pickEditedDoc.launch(Unit) }) {
+                    OutlinedButton(onClick = { pickDocFor("B") }) {
                         Text("文件方式选 B")
                     }
                 }
-                when {
-                    editedLoading -> {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Text("读取中…", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    editedInfo != null -> InfoBlock(editedInfo!!, isOriginal = false)
-                    else -> Text("未选择", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
+                SlotStatus(slotB, isOriginal = false, loadingText = "读取中…")
             }
         }
 
@@ -598,17 +552,17 @@ fun ClipMetaFixScreen() {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("3. 执行修复", style = MaterialTheme.typography.titleMedium)
-                if (originalUri != null && editedUri != null) {
-                    OutlinedButton(onClick = { swapAB() }, modifier = Modifier.fillMaxWidth()) {
+                if (slotA.uri != null && slotB.uri != null) {
+                    TextButton(onClick = { swapAB() }, modifier = Modifier.fillMaxWidth()) {
                         Text("交换 A/B（自动识别分错时用）")
                     }
                 }
-                val enabled = originalUri != null && editedUri != null && !isProcessing &&
-                    !originalLoading && !editedLoading
+                val enabled = slotA.uri != null && slotB.uri != null && !isProcessing &&
+                    !slotA.loading && !slotB.loading
                 Button(
                     onClick = {
-                        val a = originalUri ?: return@Button
-                        val b = editedUri ?: return@Button
+                        val a = slotA.uri ?: return@Button
+                        val b = slotB.uri ?: return@Button
                         isProcessing = true
                         status = "处理中… 大文件需数秒，请稍候"
                         lastResult = null
@@ -646,7 +600,7 @@ fun ClipMetaFixScreen() {
                             if (!isProcessing) {
                                 val deleteLabel = if (r.method == "overwrite") "删除原片A（B即成果，保留）"
                                 else "删除原片A和旧B"
-                                OutlinedButton(
+                                TextButton(
                                     onClick = { showDeleteConfirm = true },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
@@ -657,7 +611,7 @@ fun ClipMetaFixScreen() {
                         is RepairResult.Failure -> {}
                     }
                 }
-                if (originalUri == null || editedUri == null) {
+                if (slotA.uri == null || slotB.uri == null) {
                     Text("请先完成步骤 1 与 2", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -694,6 +648,22 @@ fun ClipMetaFixScreen() {
                 Text("• 相册中剪辑版应排在拍摄当天，详情页显示 GPS\n• 与 exiftool \"-TagsFromFile A -all:all B\" 的语义一致\n• 去除 mcvr 缩略图，不增加文件体积", style = MaterialTheme.typography.bodySmall)
             }
         }
+    }
+    }
+}
+
+/** 槽位状态行：加载中 / 摘要 / 未选择三态（步骤 1/2 共用）。 */
+@Composable
+private fun SlotStatus(slot: Slot, isOriginal: Boolean, loadingText: String) {
+    when {
+        slot.loading -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Text(loadingText, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        slot.info != null -> InfoBlock(slot.info!!, isOriginal)
+        else -> Text("未选择", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
 }
 
