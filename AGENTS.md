@@ -17,7 +17,7 @@
 - `agp 8.5.2`, `kotlin 1.9.22`, `kotlinCompilerExtensionVersion 1.5.8`, `composeBom 2024.04.01`, `activityCompose 1.8.2` (its `PickVisualMedia` has no location field — hence the raw-intent pickers), `Gradle 8.10`, `JDK 17`, `org.gradle.jvmargs=-Xmx2048m`.
 
 ## Pick channels + location redaction (hard-earned, read before touching)
-- Manifest declares `ACCESS_MEDIA_LOCATION` + `queries` for `PICK_IMAGES` and `PICK`.
+- Manifest declares `ACCESS_MEDIA_LOCATION` + `READ_MEDIA_VIDEO` (+`READ_EXTERNAL_STORAGE` maxSdk 32, `WRITE_EXTERNAL_STORAGE` maxSdk 28) + `queries` for `PICK_IMAGES` and `PICK`. Deletion needs broad media read (reverse-lookup by size/name); single-file picker grants are NOT enough — gate in `onDeleteClicked`, auto-continue after grant.
 - A primary = `ACTION_PICK` on `MediaStore.Video` (`PickVideoViaGallery`): returns a real `content://media/external/...` URI; GPS readable via `ACCESS_MEDIA_LOCATION` + `MediaStore.setRequireOriginal`.
 - PhotoPicker URIs (`content://media/picker/...`) are GPS-dead: `setRequireOriginal` throws `UnsupportedOperationException`, raw stream is redacted even with permission + unchecked strip-box. Use only for B / fallback. Detect via `UriRequireOriginal.isPickerUri` (authority `media` + path contains `/picker/`) and NEVER wrap them.
 - Read path (`MediaInfoHelper.query` two-phase): phase 1 raw URI for duration/date/size (never regress this); phase 2 `requireOriginal` URI for LOCATION only, failure discarded. `StorageHelper.copyUriToTempFile` tries wrapped first, falls back to raw, and reports which stream won (`CopyResult.source`) + wrapped exception (`wrappedError`) into the `©xyz:有/无/meta/orig/perm/auth/src/werr` debug line — ask the user to paste it when GPS is missing.

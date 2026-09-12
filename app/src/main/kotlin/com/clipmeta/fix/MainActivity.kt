@@ -221,11 +221,11 @@ fun ClipMetaFixScreen() {
         }
 
     /**
-     * 删除入口：安全规则 overwrite→只删A；insert→删A+旧B。picker 会话 URI 删不动会明说。
+     * 删除执行体：安全规则 overwrite→只删A；insert→删A+旧B。picker 会话 URI 删不动会明说。
      * 顺序：先逐个直删（自己的文件零弹窗秒删），被拒的再攒起来走一次系统删框，
-     * 每一步的真实原因都进状态栏，不再吞异常。
+     * 每一步的真实原因都进状态栏，不再吞异常。调用前须确认宽泛读权限（见 onDeleteClicked）。
      */
-    fun onDeleteClicked() {
+    fun proceedDelete() {
         val r = lastResult as? RepairResult.Success ?: return
         val targets = mutableListOf<Uri>()
         originalUri?.let { targets.add(it) }
@@ -319,7 +319,8 @@ fun ClipMetaFixScreen() {
                 status = "已删除所选原文件，请去相册确认"
             } else {
                 if (deleted.isNotEmpty()) onDeleteDone(deleted.map(::toOriginal), clearResult = false)
-                val hint = (resolveNotes + errHints).distinct().take(3).joinToString("；")
+                val mperm = if (com.clipmeta.fix.util.MediaDeleter.hasBroadMediaRead(context)) "有" else "无"
+                val hint = (resolveNotes + errHints + listOf("mperm:$mperm")).distinct().take(4).joinToString("；")
                 val shapes = denied.map { d ->
                     val o = toOriginal(d)
                     val label = if (o == originalUri) "A" else if (o == editedUri) "B" else "?"
@@ -333,6 +334,30 @@ fun ClipMetaFixScreen() {
                     (if (hint.isNotBlank()) "（$hint$partialTip）" else "") + "，请在相册手动删除"
             }
         }
+    }
+
+    // 宽泛媒体读授权（删除反查全库的前提）：通过后自动继续删除；拒绝则维持手动删
+    val mediaReadLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                proceedDelete()
+            } else {
+                status = "未授予媒体库访问权限，反查不到条目，请在相册手动删除"
+            }
+        }
+
+    /** 删除入口（含宽泛读权限门；声明顺序必须在 proceedDelete 之后、调用方之前）。 */
+    fun onDeleteClicked() {
+        if (!com.clipmeta.fix.util.MediaDeleter.hasBroadMediaRead(context)) {
+            status = "删除需要媒体库访问权限，请在弹窗中允许后自动继续"
+            try {
+                mediaReadLauncher.launch(com.clipmeta.fix.util.MediaDeleter.broadReadPermissionName())
+            } catch (_: Exception) {
+                status = "无法弹出媒体权限申请，请去系统设置授予后重试，或在相册手动删除"
+            }
+            return
+        }
+        proceedDelete()
     }
 
     /** A 的主通道：相册直选（真实 MediaStore URI，可读 GPS）；无 Gallery 则回退位置授权选择器。 */

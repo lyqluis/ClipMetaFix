@@ -5,6 +5,16 @@
          MediaMetadataRetriever.LOCATION 返回 null，openInputStream 拿到的也是去 GPS 字节 -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
+    <!-- 宽泛媒体库访问：删除反查要在 MediaStore.Video 全库按大小/名字找条目，
+         单文件授权不够，必须持有。33+ 用细分的 VIDEO，32- 用 EXTERNAL_STORAGE -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <!-- 查询系统照片选择器（ACTION_PICK_IMAGES），否则 resolveActivity 在 targetSdk 30+ 上永远返回 null -->
     <queries>
         <intent>

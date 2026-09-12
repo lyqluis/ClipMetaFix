@@ -61,6 +61,18 @@ object MediaDeleter {
     /** picker 会话 URI 不可删；其余尝试直接删。 */
     fun isDeletable(uri: Uri): Boolean = !UriRequireOriginal.isPickerUri(uri)
 
+    /** 删除反查要用的宽泛读权限名（33+ 细分 VIDEO，以下沿用 EXTERNAL_STORAGE）。 */
+    fun broadReadPermissionName(): String =
+        if (Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_VIDEO
+        else android.Manifest.permission.READ_EXTERNAL_STORAGE
+
+    /** 是否持有宽泛媒体读权限（反查全库的前提；单文件授权不算）。 */
+    fun hasBroadMediaRead(context: Context): Boolean {
+        return androidx.core.content.ContextCompat.checkSelfPermission(
+            context, broadReadPermissionName()
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
     /** 是否标准 MediaStore 条目 URI（content://media/.../<数字id>，删框只认这种）。 */
     fun isStandardMediaItem(uri: Uri): Boolean {
         if (uri.authority != MediaStore.AUTHORITY) return false
