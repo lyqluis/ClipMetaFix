@@ -61,6 +61,63 @@ object MediaDeleter {
     /** picker 会话 URI 不可删；其余尝试直接删。 */
     fun isDeletable(uri: Uri): Boolean = !UriRequireOriginal.isPickerUri(uri)
 
+    /** 是否标准 MediaStore 条目 URI（content://media/.../<数字id>，删框只认这种）。 */
+    fun isStandardMediaItem(uri: Uri): Boolean {
+        if (uri.authority != MediaStore.AUTHORITY) return false
+        val tail = uri.lastPathSegment ?: return false
+        return tail.isNotEmpty() && tail.all { it.isDigit() }
+    }
+
+    /** 诊断用：authority + 尾段形态。 */
+    fun uriShape(uri: Uri): String {
+        val tail = uri.lastPathSegment ?: "-"
+        val shown = if (tail.length > 24) "…${tail.takeLast(20)}" else tail
+        return "auth:${uri.authority ?: "-"}/tail:$shown"
+    }
+
+    /**
+     * 把各类 URI 归一化成标准 MediaStore 条目 URI（供删框用）。
+     * 已是标准形则原样返回；自家 Gallery 等非标准形按 DISPLAY_NAME（+SIZE）反查；
+     * 查不到返回原 URI（调用方照常尝试，失败进手动提示）。
+     */
+    fun resolveForDelete(context: Context, uri: Uri, displayName: String? = null, sizeBytes: Long = -1): Uri {
+        if (isStandardMediaItem(uri)) return uri
+        if (UriRequireOriginal.isPickerUri(uri)) return uri
+        return findMediaStoreItem(context, displayName, sizeBytes) ?: uri
+    }
+
+    private fun findMediaStoreItem(context: Context, displayName: String?, sizeBytes: Long): Uri? {
+        if (displayName.isNullOrBlank()) return null
+        return try {
+            val coll = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            }
+            context.contentResolver.query(
+                coll,
+                arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.SIZE),
+                "${MediaStore.Video.Media.DISPLAY_NAME}=?",
+                arrayOf(displayName),
+                "${MediaStore.Video.Media._ID} DESC"
+            )?.use { c ->
+                val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
+                var fallback: Long? = null
+                while (c.moveToNext()) {
+                    val id = c.getLong(idIdx)
+                    if (fallback == null) fallback = id
+                    if (sizeBytes > 0 && sizeIdx >= 0 && c.getLong(sizeIdx) == sizeBytes) {
+                        return android.content.ContentUris.withAppendedId(coll, id)
+                    }
+                }
+                fallback?.let { android.content.ContentUris.withAppendedId(coll, it) }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * 无需系统框时的直接删除（API < 30，或 Document URI）。
      * API 29 他人文件会抛 RecoverableSecurityException，调用方取

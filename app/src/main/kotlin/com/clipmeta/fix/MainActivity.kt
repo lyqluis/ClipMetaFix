@@ -63,6 +63,8 @@ fun ClipMetaFixScreen() {
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var pendingDeleteUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingDeleteDone by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    // 归一化 URI → 原选择 URI（删框/直删用归一化形，清状态用原形）
+    val deleteBackMap = remember { mutableMapOf<Uri, Uri>() }
     val scope = rememberCoroutineScope()
 
     fun onDeleteDone(targets: List<Uri>, clearResult: Boolean = true) {
@@ -205,11 +207,11 @@ fun ClipMetaFixScreen() {
     val deleteConsentLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
-                val done = pendingDeleteUris.toList()
+                val done = pendingDeleteUris.map { deleteBackMap[it] ?: it }
                 onDeleteDone(done)
                 status = "已删除所选原文件，请去相册确认"
             } else {
-                val done = pendingDeleteDone.toList()
+                val done = pendingDeleteDone.map { deleteBackMap[it] ?: it }
                 if (done.isNotEmpty()) onDeleteDone(done, clearResult = false)
                 status = "删除未完成（系统确认被拒绝或取消）" +
                     if (done.isNotEmpty()) "，已直删 ${done.size} 个，剩余仍在" else "，原文件仍在"
@@ -237,13 +239,24 @@ fun ClipMetaFixScreen() {
             status = "照片选择器返回的临时条目无法删除，请在相册手动处理；其余继续"
         }
         if (deletable.isEmpty()) return
+        // 归一化成标准 MediaStore 条目 URI（删框只认这种）；回映射留着清状态用
+        deleteBackMap.clear()
+        val resolved = deletable.map { u ->
+            val info = if (u == originalUri) originalInfo else if (u == editedUri) editedInfo else null
+            val res = com.clipmeta.fix.util.MediaDeleter.resolveForDelete(
+                context, u, info?.displayName, info?.sizeBytes ?: -1
+            )
+            deleteBackMap[res] = u
+            res
+        }
+        fun toOriginal(u: Uri): Uri = deleteBackMap[u] ?: u
         scope.launch {
             val deleted = mutableListOf<Uri>()
             val denied = mutableListOf<Uri>()
             val errHints = mutableListOf<String>()
             var singleSender: IntentSender? = null
             withContext(Dispatchers.IO) {
-                for (uri in deletable) {
+                for (uri in resolved) {
                     try {
                         if (com.clipmeta.fix.util.MediaDeleter.deleteDirect(context, uri)) deleted.add(uri)
                         else denied.add(uri)
@@ -291,12 +304,17 @@ fun ClipMetaFixScreen() {
                 }
             }
             if (denied.isEmpty()) {
-                onDeleteDone(deleted)
+                onDeleteDone(deleted.map(::toOriginal))
                 status = "已删除所选原文件，请去相册确认"
             } else {
-                if (deleted.isNotEmpty()) onDeleteDone(deleted, clearResult = false)
+                if (deleted.isNotEmpty()) onDeleteDone(deleted.map(::toOriginal), clearResult = false)
                 val hint = errHints.distinct().take(2).joinToString("；")
-                status = "删不动 ${denied.size} 个" +
+                val shapes = denied.map { d ->
+                    val o = toOriginal(d)
+                    val label = if (o == originalUri) "A" else if (o == editedUri) "B" else "?"
+                    "$label(${com.clipmeta.fix.util.MediaDeleter.uriShape(d)})"
+                }.joinToString("；")
+                status = "删不动 ${denied.size} 个[$shapes]" +
                     (if (hint.isNotBlank()) "（$hint）" else "") + "，请在相册手动删除"
             }
         }
