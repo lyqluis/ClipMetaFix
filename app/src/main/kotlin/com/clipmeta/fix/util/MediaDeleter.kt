@@ -75,46 +75,73 @@ object MediaDeleter {
         return "auth:${uri.authority ?: "-"}/tail:$shown"
     }
 
-    /**
-     * 把各类 URI 归一化成标准 MediaStore 条目 URI（供删框用）。
-     * 已是标准形则原样返回；自家 Gallery 等非标准形按 DISPLAY_NAME（+SIZE）反查；
-     * 查不到返回原 URI（调用方照常尝试，失败进手动提示）。
-     */
-    fun resolveForDelete(context: Context, uri: Uri, displayName: String? = null, sizeBytes: Long = -1): Uri {
-        if (isStandardMediaItem(uri)) return uri
-        if (UriRequireOriginal.isPickerUri(uri)) return uri
-        return findMediaStoreItem(context, displayName, sizeBytes) ?: uri
+    /** 反查结果：命中给标准 URI，miss 给原因（行数/异常），供状态栏诊断。 */
+    sealed class ResolveOutcome {
+        data class Hit(val uri: Uri) : ResolveOutcome()
+        data class Miss(val reason: String) : ResolveOutcome()
     }
 
-    private fun findMediaStoreItem(context: Context, displayName: String?, sizeBytes: Long): Uri? {
-        if (displayName.isNullOrBlank()) return null
+    /**
+     * 把各类 URI 归一化成标准 MediaStore 条目 URI（供删框用）。
+     * 已是标准形则 Hit 原样返回；自家 Gallery 等非标准形按 DISPLAY_NAME（+SIZE）跨卷反查；
+     * 查不到给 Miss（调用方用原 URI 硬试，失败进手动提示）。
+     */
+    fun resolveForDelete(context: Context, uri: Uri, displayName: String? = null, sizeBytes: Long = -1): ResolveOutcome {
+        if (isStandardMediaItem(uri)) return ResolveOutcome.Hit(uri)
+        if (UriRequireOriginal.isPickerUri(uri)) return ResolveOutcome.Miss("picker会话无条目")
+        return findMediaStoreItem(context, displayName, sizeBytes)
+    }
+
+    private fun findMediaStoreItem(context: Context, displayName: String?, sizeBytes: Long): ResolveOutcome {
+        if (displayName.isNullOrBlank()) return ResolveOutcome.Miss("无文件名")
         return try {
-            val coll = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            } else {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
-            context.contentResolver.query(
-                coll,
-                arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.SIZE),
-                "${MediaStore.Video.Media.DISPLAY_NAME}=?",
-                arrayOf(displayName),
-                "${MediaStore.Video.Media._ID} DESC"
-            )?.use { c ->
-                val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
-                var fallback: Long? = null
-                while (c.moveToNext()) {
-                    val id = c.getLong(idIdx)
-                    if (fallback == null) fallback = id
-                    if (sizeBytes > 0 && sizeIdx >= 0 && c.getLong(sizeIdx) == sizeBytes) {
-                        return android.content.ContentUris.withAppendedId(coll, id)
-                    }
+            // 遍历所有外部卷（副卷/SD卡上的文件主卷查不到）
+            val volumes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    MediaStore.getExternalVolumeNames(context)
+                } catch (_: Exception) {
+                    setOf(MediaStore.VOLUME_EXTERNAL_PRIMARY)
                 }
-                fallback?.let { android.content.ContentUris.withAppendedId(coll, it) }
+            } else {
+                setOf(MediaStore.VOLUME_EXTERNAL)
             }
-        } catch (_: Exception) {
-            null
+            data class Row(val coll: android.net.Uri, val id: Long, val size: Long)
+            val rows = mutableListOf<Row>()
+            for (vol in volumes) {
+                val coll = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaStore.Video.Media.getContentUri(vol)
+                } else {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                }
+                try {
+                    context.contentResolver.query(
+                        coll,
+                        arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.SIZE),
+                        "${MediaStore.Video.Media.DISPLAY_NAME}=?",
+                        arrayOf(displayName),
+                        null
+                    )?.use { c ->
+                        val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                        val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
+                        while (c.moveToNext()) {
+                            rows.add(Row(coll, c.getLong(idIdx), if (sizeIdx >= 0) c.getLong(sizeIdx) else -1))
+                        }
+                    }
+                } catch (_: Exception) {
+                    // 单卷失败不影响其他卷
+                }
+            }
+            if (rows.isEmpty()) return ResolveOutcome.Miss("查0行(名:$displayName)")
+            // SIZE 对上最可信；无 SIZE 时仅当全局唯一一行才敢用，绝不猜着删
+            val sized = if (sizeBytes > 0) rows.find { it.size == sizeBytes } else null
+            val chosen = sized ?: rows.singleOrNull()
+            if (chosen == null) {
+                ResolveOutcome.Miss("同名${rows.size}行且大小不定")
+            } else {
+                ResolveOutcome.Hit(android.content.ContentUris.withAppendedId(chosen.coll, chosen.id))
+            }
+        } catch (e: Exception) {
+            ResolveOutcome.Miss("err:" + shortErr(e))
         }
     }
 

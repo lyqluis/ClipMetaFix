@@ -241,13 +241,24 @@ fun ClipMetaFixScreen() {
         if (deletable.isEmpty()) return
         // 归一化成标准 MediaStore 条目 URI（删框只认这种）；回映射留着清状态用
         deleteBackMap.clear()
+        val resolveNotes = mutableListOf<String>()
         val resolved = deletable.map { u ->
             val info = if (u == originalUri) originalInfo else if (u == editedUri) editedInfo else null
-            val res = com.clipmeta.fix.util.MediaDeleter.resolveForDelete(
+            val label = if (u == originalUri) "A" else if (u == editedUri) "B" else "?"
+            when (val out = com.clipmeta.fix.util.MediaDeleter.resolveForDelete(
                 context, u, info?.displayName, info?.sizeBytes ?: -1
-            )
-            deleteBackMap[res] = u
-            res
+            )) {
+                is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Hit -> {
+                    if (out.uri != u) resolveNotes.add("$label归一命中")
+                    deleteBackMap[out.uri] = u
+                    out.uri
+                }
+                is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Miss -> {
+                    resolveNotes.add("$label反查miss(${out.reason})")
+                    deleteBackMap[u] = u
+                    u
+                }
+            }
         }
         fun toOriginal(u: Uri): Uri = deleteBackMap[u] ?: u
         scope.launch {
@@ -308,14 +319,18 @@ fun ClipMetaFixScreen() {
                 status = "已删除所选原文件，请去相册确认"
             } else {
                 if (deleted.isNotEmpty()) onDeleteDone(deleted.map(::toOriginal), clearResult = false)
-                val hint = errHints.distinct().take(2).joinToString("；")
+                val hint = (resolveNotes + errHints).distinct().take(3).joinToString("；")
                 val shapes = denied.map { d ->
                     val o = toOriginal(d)
                     val label = if (o == originalUri) "A" else if (o == editedUri) "B" else "?"
                     "$label(${com.clipmeta.fix.util.MediaDeleter.uriShape(d)})"
                 }.joinToString("；")
+                val partialTip =
+                    if (Build.VERSION.SDK_INT >= 34 && resolveNotes.any { it.contains("查0行") })
+                        "；若照片权限给的是“仅选中部分”，请去系统设置改成允许全部后重试"
+                    else ""
                 status = "删不动 ${denied.size} 个[$shapes]" +
-                    (if (hint.isNotBlank()) "（$hint）" else "") + "，请在相册手动删除"
+                    (if (hint.isNotBlank()) "（$hint$partialTip）" else "") + "，请在相册手动删除"
             }
         }
     }
