@@ -3,6 +3,7 @@ package com.clipmeta.fix
 import android.Manifest
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
@@ -34,8 +35,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    // 分享收件箱：相册 ACTION_SEND / SEND_MULTIPLE 带来的视频。Activity 层持有，
+    // Compose 侧消费一次（takeInbox），singleTop + onNewIntent 保证前台再分享也能接到。
+    var sharedInbox by mutableStateOf(emptyList<Uri>())
+        private set
+
+    fun takeInbox(): List<Uri> {
+        val u = sharedInbox
+        sharedInbox = emptyList()
+        return u
+    }
+
+    private fun absorbShare(i: Intent?) {
+        val uris = com.clipmeta.fix.util.SharedVideoReceiver.extractUris(i)
+        if (uris.isNotEmpty()) sharedInbox = uris
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        absorbShare(intent)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -43,6 +61,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        absorbShare(intent)
     }
 }
 
@@ -105,6 +129,69 @@ fun ClipMetaFixScreen() {
                 editedInfo = info
                 editedLoading = false
                 lastResult = null
+            }
+        }
+    }
+
+    /** 交换 A/B（含摘要与加载态；旧修复结果作废，避免删错）。 */
+    fun swapAB() {
+        val tu = originalUri
+        val ti = originalInfo
+        val tl = originalLoading
+        originalUri = editedUri
+        originalInfo = editedInfo
+        originalLoading = editedLoading
+        editedUri = tu
+        editedInfo = ti
+        editedLoading = tl
+        lastResult = null
+        status = "已交换 A/B，请核对时间与 GPS 后再执行修复"
+    }
+
+    /**
+     * 分享视频的自动分配：逐个 queryWithGps（复用防呆链路）→ GPS/时长分类 →
+     * 直接落槽（省一次重复查询）。声明顺序必须在消费方（LaunchedEffect）之前。
+     */
+    fun handleSharedUris(uris: List<Uri>) {
+        val top = uris.take(2)
+        if (top.isEmpty()) return
+        status = "正在识别分享来的 ${top.size} 个视频…"
+        scope.launch {
+            val infos = withContext(Dispatchers.IO) {
+                top.map { it to MediaInfoHelper.queryWithGps(context, it) }
+            }
+            val assignment = com.clipmeta.fix.util.SharedVideoReceiver.classify(
+                infos.map { (u, info) ->
+                    com.clipmeta.fix.util.SharedVideoReceiver.Candidate(
+                        uri = u,
+                        hasGps = !info.location.isNullOrBlank(),
+                        durationMs = info.durationMs,
+                        sizeBytes = info.sizeBytes,
+                        name = info.displayName
+                    )
+                }
+            )
+            val aInfo = infos.firstOrNull { it.first == assignment.a }
+            val bInfo = infos.firstOrNull { it.first == assignment.b }
+            if (aInfo != null) {
+                originalUri = aInfo.first
+                originalInfo = aInfo.second
+                originalLoading = false
+            }
+            if (bInfo != null) {
+                editedUri = bInfo.first
+                editedInfo = bInfo.second
+                editedLoading = false
+            }
+            lastResult = null
+            val aName = aInfo?.second?.displayName
+            val bName = bInfo?.second?.displayName
+            status = when (assignment.basis) {
+                "gps" -> "已从分享自动识别：有 GPS 的“${aName}”进 A，无 GPS 的“${bName}”进 B；若不对请点“交换 A/B”"
+                "duration" -> "分享的两个视频 GPS 无法区分，已按时长自动分配（A“${aName}”/B“${bName}”）；若不对请点“交换 A/B”"
+                "single-gps" -> "分享的视频有 GPS，已放入 A 槽；请再选剪辑版 B"
+                "single-nogps" -> "分享的视频无 GPS，已放入 B 槽；请再选原片 A"
+                else -> "未能识别分享的视频，请手动选择"
             }
         }
     }
@@ -419,13 +506,23 @@ fun ClipMetaFixScreen() {
         }
     }
 
+    // 分享消费：收件箱非空（冷启动或前台再分享）即识别分配一次，takeInbox 保证只消费一次。
+    val activity = context as? MainActivity
+    val inbox = activity?.sharedInbox ?: emptyList()
+    LaunchedEffect(inbox) {
+        if (inbox.isNotEmpty()) {
+            val incoming = activity?.takeInbox() ?: emptyList()
+            if (incoming.isNotEmpty()) handleSharedUris(incoming)
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("ClipMetaFix", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "解决澎湃OS剪辑后丢失 GPS/拍摄时间的工具。按顺序选择 原片A 与 剪辑版B，执行修复。",
+            "解决澎湃OS剪辑后丢失 GPS/拍摄时间的工具。按顺序选择 原片A 与 剪辑版B，执行修复；也可从相册直接分享 1~2 个视频过来自动识别。",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !locGranted) {
@@ -501,6 +598,11 @@ fun ClipMetaFixScreen() {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("3. 执行修复", style = MaterialTheme.typography.titleMedium)
+                if (originalUri != null && editedUri != null) {
+                    OutlinedButton(onClick = { swapAB() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("交换 A/B（自动识别分错时用）")
+                    }
+                }
                 val enabled = originalUri != null && editedUri != null && !isProcessing &&
                     !originalLoading && !editedLoading
                 Button(
