@@ -31,21 +31,31 @@ object MediaDeleter {
         uri.authority?.endsWith(".documents") == true ||
             uri.authority?.contains("documents") == true
 
+    /** 系统删框构造结果：成功给 Sender，失败给原因（诊断用，不再吞异常）。 */
+    sealed class DeleteRequest {
+        data class Ready(val sender: IntentSender) : DeleteRequest()
+        data class Failed(val reason: String) : DeleteRequest()
+        data object Unsupported : DeleteRequest() // API < 30，无此接口
+    }
+
     /**
-     * 构造删除所需的系统授权 IntentSender（API 30+ 批量 / API 29 单条回退）。
-     * 返回 null 表示无需系统框，调用方直接 [deleteDirect]。
+     * 构造删除所需的系统授权 IntentSender（API 30+ 批量）。
      * picker 会话 URI 无法删除，调用方应先用 [isDeletable] 过滤并提示。
      */
-    fun buildDeleteRequest(context: Context, uris: List<Uri>): IntentSender? {
-        if (uris.isEmpty()) return null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return try {
-                MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender
-            } catch (_: Exception) {
-                null
-            }
+    fun buildDeleteRequest(context: Context, uris: List<Uri>): DeleteRequest {
+        if (uris.isEmpty()) return Failed("空列表")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return Unsupported
+        return try {
+            Ready(MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender)
+        } catch (e: Exception) {
+            Failed(shortErr(e))
         }
-        return null
+    }
+
+    /** 异常摘要（单行截断，供状态栏诊断）。 */
+    fun shortErr(e: Exception): String {
+        val msg = (e.message ?: "").replace(Regex("\\s+"), " ").take(100)
+        return e.javaClass.simpleName + (if (msg.isBlank()) "" else ":$msg")
     }
 
     /** picker 会话 URI 不可删；其余尝试直接删。 */

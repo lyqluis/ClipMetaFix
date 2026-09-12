@@ -62,9 +62,10 @@ fun ClipMetaFixScreen() {
     var pendingTarget by remember { mutableStateOf<String?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var pendingDeleteUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingDeleteDone by remember { mutableStateOf<List<Uri>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
-    fun onDeleteDone(targets: List<Uri>) {
+    fun onDeleteDone(targets: List<Uri>, clearResult: Boolean = true) {
         for (u in targets) com.clipmeta.fix.util.MediaDeleter.releasePersistable(context, u)
         if (originalUri in targets) {
             originalUri = null
@@ -74,8 +75,7 @@ fun ClipMetaFixScreen() {
             editedUri = null
             editedInfo = null
         }
-        lastResult = null
-        status = "已删除所选原文件，请去相册确认"
+        if (clearResult) lastResult = null
     }
 
     fun onUriPicked(target: String, uri: Uri) {
@@ -201,56 +201,28 @@ fun ClipMetaFixScreen() {
         }
     }
 
-    // 删除系统授权回调（R+ 批量删除 / Q 单条授权）：用户点了允许即视为删完，清状态。
+    // 删除系统授权回调：用户点了允许即视为删框内条目删完，清状态；取消则只清已直删的。
     val deleteConsentLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
-                onDeleteDone(pendingDeleteUris)
+                val done = pendingDeleteUris.toList()
+                onDeleteDone(done)
+                status = "已删除所选原文件，请去相册确认"
             } else {
-                status = "删除未完成（系统确认被拒绝或取消），原文件仍在"
+                val done = pendingDeleteDone.toList()
+                if (done.isNotEmpty()) onDeleteDone(done, clearResult = false)
+                status = "删除未完成（系统确认被拒绝或取消）" +
+                    if (done.isNotEmpty()) "，已直删 ${done.size} 个，剩余仍在" else "，原文件仍在"
             }
             pendingDeleteUris = emptyList()
+            pendingDeleteDone = emptyList()
         }
 
-    /** 直接删除（无需系统框 / 系统框拿不到时）；Q 他人文件走授权 Sender。 */
-    fun runDeleteDirect(targets: List<Uri>) {
-        scope.launch {
-            var needSender: IntentSender? = null
-            val failed = mutableListOf<Uri>()
-            withContext(Dispatchers.IO) {
-                for (uri in targets) {
-                    try {
-                        if (com.clipmeta.fix.util.MediaDeleter.deleteDirect(context, uri)) {
-                            com.clipmeta.fix.util.MediaDeleter.releasePersistable(context, uri)
-                        } else {
-                            failed.add(uri)
-                        }
-                    } catch (e: Exception) {
-                        val sender = (e as? android.app.RecoverableSecurityException)
-                            ?.userAction?.actionIntent?.intentSender
-                        if (sender != null && needSender == null) needSender = sender
-                        else failed.add(uri)
-                    }
-                }
-            }
-            val sender = needSender
-            if (sender != null) {
-                pendingDeleteUris = targets
-                try {
-                    deleteConsentLauncher.launch(IntentSenderRequest.Builder(sender).build())
-                } catch (_: Exception) {
-                    pendingDeleteUris = emptyList()
-                    status = "删除失败：无法弹出系统授权，请在相册手动删"
-                }
-            } else if (failed.isEmpty()) {
-                onDeleteDone(targets)
-            } else {
-                status = "部分删除失败（${failed.size} 个），请在相册手动删除剩余文件"
-            }
-        }
-    }
-
-    /** 删除入口：安全规则 overwrite→只删A；insert→删A+旧B。picker 会话 URI 删不动会明说。 */
+    /**
+     * 删除入口：安全规则 overwrite→只删A；insert→删A+旧B。picker 会话 URI 删不动会明说。
+     * 顺序：先逐个直删（自己的文件零弹窗秒删），被拒的再攒起来走一次系统删框，
+     * 每一步的真实原因都进状态栏，不再吞异常。
+     */
     fun onDeleteClicked() {
         val r = lastResult as? RepairResult.Success ?: return
         val targets = mutableListOf<Uri>()
@@ -265,19 +237,69 @@ fun ClipMetaFixScreen() {
             status = "照片选择器返回的临时条目无法删除，请在相册手动处理；其余继续"
         }
         if (deletable.isEmpty()) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val s = com.clipmeta.fix.util.MediaDeleter.buildDeleteRequest(context, deletable)
-            if (s != null) {
-                pendingDeleteUris = deletable
-                try {
-                    deleteConsentLauncher.launch(IntentSenderRequest.Builder(s).build())
-                    return
-                } catch (_: Exception) {
-                    pendingDeleteUris = emptyList()
+        scope.launch {
+            val deleted = mutableListOf<Uri>()
+            val denied = mutableListOf<Uri>()
+            val errHints = mutableListOf<String>()
+            var singleSender: IntentSender? = null
+            withContext(Dispatchers.IO) {
+                for (uri in deletable) {
+                    try {
+                        if (com.clipmeta.fix.util.MediaDeleter.deleteDirect(context, uri)) deleted.add(uri)
+                        else denied.add(uri)
+                    } catch (e: Exception) {
+                        val sender = (e as? android.app.RecoverableSecurityException)
+                            ?.userAction?.actionIntent?.intentSender
+                        if (sender != null && singleSender == null) singleSender = sender
+                        denied.add(uri)
+                        errHints.add(com.clipmeta.fix.util.MediaDeleter.shortErr(e))
+                    }
                 }
             }
+            // R+：被拒的走一次批量系统删框
+            if (denied.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                when (val req = com.clipmeta.fix.util.MediaDeleter.buildDeleteRequest(context, denied)) {
+                    is com.clipmeta.fix.util.MediaDeleter.DeleteRequest.Ready -> {
+                        pendingDeleteUris = deleted + denied
+                        pendingDeleteDone = deleted.toList()
+                        try {
+                            deleteConsentLauncher.launch(IntentSenderRequest.Builder(req.sender).build())
+                            return@launch
+                        } catch (e: Exception) {
+                            pendingDeleteUris = emptyList()
+                            pendingDeleteDone = emptyList()
+                            errHints.add("弹框失败:" + com.clipmeta.fix.util.MediaDeleter.shortErr(e))
+                        }
+                    }
+                    is com.clipmeta.fix.util.MediaDeleter.DeleteRequest.Failed ->
+                        errHints.add("删框构造失败:" + req.reason)
+                    is com.clipmeta.fix.util.MediaDeleter.DeleteRequest.Unsupported -> {}
+                }
+            }
+            // Q 单条授权 Sender（无批量框时）
+            val sender = singleSender
+            if (denied.isNotEmpty() && sender != null) {
+                pendingDeleteUris = deleted + denied
+                pendingDeleteDone = deleted.toList()
+                try {
+                    deleteConsentLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                    return@launch
+                } catch (e: Exception) {
+                    pendingDeleteUris = emptyList()
+                    pendingDeleteDone = emptyList()
+                    errHints.add("弹框失败:" + com.clipmeta.fix.util.MediaDeleter.shortErr(e))
+                }
+            }
+            if (denied.isEmpty()) {
+                onDeleteDone(deleted)
+                status = "已删除所选原文件，请去相册确认"
+            } else {
+                if (deleted.isNotEmpty()) onDeleteDone(deleted, clearResult = false)
+                val hint = errHints.distinct().take(2).joinToString("；")
+                status = "删不动 ${denied.size} 个" +
+                    (if (hint.isNotBlank()) "（$hint）" else "") + "，请在相册手动删除"
+            }
         }
-        runDeleteDirect(deletable)
     }
 
     /** A 的主通道：相册直选（真实 MediaStore URI，可读 GPS）；无 Gallery 则回退位置授权选择器。 */
