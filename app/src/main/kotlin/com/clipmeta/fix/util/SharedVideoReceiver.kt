@@ -5,7 +5,7 @@ import android.net.Uri
 import android.os.Build
 
 /**
- * 相册分享入口（ACTION_SEND / ACTION_SEND_MULTIPLE，video/*）的解析与 A/B 自动识别。
+ * 相册分享入口（ACTION_SEND / ACTION_SEND_MULTIPLE，mimeType 为 video）的解析与 A/B 自动识别。
  * 识别信号优先级：GPS（queryWithGps 已回填 location，含 mp4engine 兜底）> 时长 > 大小。
  * 分享 intent 自带一次性读授权，现有“拷临时文件再修”链路天然兼容，无需持久化授权。
  */
