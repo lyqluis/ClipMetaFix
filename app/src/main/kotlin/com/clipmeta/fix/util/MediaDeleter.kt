@@ -83,17 +83,27 @@ object MediaDeleter {
 
     /**
      * 把各类 URI 归一化成标准 MediaStore 条目 URI（供删框用）。
-     * 已是标准形则 Hit 原样返回；自家 Gallery 等非标准形按 DISPLAY_NAME（+SIZE）跨卷反查；
-     * 查不到给 Miss（调用方用原 URI 硬试，失败进手动提示）。
+     * 已是标准形则 Hit 原样返回；自家 Gallery 等非标准形先按 SIZE（+DURATION）跨卷反查，
+     * 再按 DISPLAY_NAME 反查；查不到给 Miss（调用方用原 URI 硬试，失败进手动提示）。
      */
-    fun resolveForDelete(context: Context, uri: Uri, displayName: String? = null, sizeBytes: Long = -1): ResolveOutcome {
+    fun resolveForDelete(
+        context: Context,
+        uri: Uri,
+        displayName: String? = null,
+        sizeBytes: Long = -1,
+        durationMs: Long? = null
+    ): ResolveOutcome {
         if (isStandardMediaItem(uri)) return ResolveOutcome.Hit(uri)
         if (UriRequireOriginal.isPickerUri(uri)) return ResolveOutcome.Miss("picker会话无条目")
-        return findMediaStoreItem(context, displayName, sizeBytes)
+        return findMediaStoreItem(context, displayName, sizeBytes, durationMs)
     }
 
-    private fun findMediaStoreItem(context: Context, displayName: String?, sizeBytes: Long): ResolveOutcome {
-        if (displayName.isNullOrBlank()) return ResolveOutcome.Miss("无文件名")
+    private fun findMediaStoreItem(
+        context: Context,
+        displayName: String?,
+        sizeBytes: Long,
+        durationMs: Long?
+    ): ResolveOutcome {
         return try {
             // 遍历所有外部卷（副卷/SD卡上的文件主卷查不到）
             val volumes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -105,45 +115,115 @@ object MediaDeleter {
             } else {
                 setOf(MediaStore.VOLUME_EXTERNAL)
             }
-            data class Row(val coll: android.net.Uri, val id: Long, val size: Long)
-            val rows = mutableListOf<Row>()
-            for (vol in volumes) {
-                val coll = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    MediaStore.Video.Media.getContentUri(vol)
-                } else {
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                }
-                try {
-                    context.contentResolver.query(
-                        coll,
-                        arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.SIZE),
-                        "${MediaStore.Video.Media.DISPLAY_NAME}=?",
-                        arrayOf(displayName),
-                        null
-                    )?.use { c ->
-                        val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                        val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
-                        while (c.moveToNext()) {
-                            rows.add(Row(coll, c.getLong(idIdx), if (sizeIdx >= 0) c.getLong(sizeIdx) else -1))
+            // 第一判据：SIZE 精确查（文件名会骗人，字节数不会；空游标直接记0行）
+            if (sizeBytes > 0) {
+                val rows = mutableListOf<Row2>()
+                for (vol in volumes) {
+                    val coll = collectionFor(context, vol)
+                    try {
+                        context.contentResolver.query(
+                            coll,
+                            arrayOf(
+                                MediaStore.Video.Media._ID,
+                                MediaStore.Video.Media.SIZE,
+                                MediaStore.Video.Media.DURATION
+                            ),
+                            "${MediaStore.Video.Media.SIZE}=?",
+                            arrayOf(sizeBytes.toString()),
+                            null
+                        )?.use { c ->
+                            collectRows(c, coll, rows)
                         }
+                    } catch (_: Exception) {
+                        // 单卷失败不影响其他卷
                     }
-                } catch (_: Exception) {
-                    // 单卷失败不影响其他卷
                 }
+                if (rows.size == 1) {
+                    val r = rows[0]
+                    return ResolveOutcome.Hit(android.content.ContentUris.withAppendedId(r.coll, r.id))
+                }
+                if (rows.size > 1 && durationMs != null && durationMs > 0) {
+                    // 多行并列用时长缩圈（±2s 容差），仍不唯一就放弃
+                    val narrowed = rows.filter { kotlin.math.abs(it.dur - durationMs) <= 2000 }
+                    if (narrowed.size == 1) {
+                        val r = narrowed[0]
+                        return ResolveOutcome.Hit(android.content.ContentUris.withAppendedId(r.coll, r.id))
+                    }
+                    return ResolveOutcome.Miss("同大小${rows.size}行且时长不定")
+                }
+                if (rows.size > 1) return ResolveOutcome.Miss("同大小${rows.size}行且无时长")
+                // size查0行：继续往下用文件名查（可能 SIZE 登记不一致）
             }
-            if (rows.isEmpty()) return ResolveOutcome.Miss("查0行(名:$displayName)")
-            // SIZE 对上最可信；无 SIZE 时仅当全局唯一一行才敢用，绝不猜着删
-            val sized = if (sizeBytes > 0) rows.find { it.size == sizeBytes } else null
-            val chosen = sized ?: rows.singleOrNull()
-            if (chosen == null) {
-                ResolveOutcome.Miss("同名${rows.size}行且大小不定")
+            // 第二判据：DISPLAY_NAME 精确查（MIUI 报的名字可能有细微出入，仅作补充）
+            if (!displayName.isNullOrBlank()) {
+                val rows = mutableListOf<Row2>()
+                for (vol in volumes) {
+                    val coll = collectionFor(context, vol)
+                    try {
+                        context.contentResolver.query(
+                            coll,
+                            arrayOf(
+                                MediaStore.Video.Media._ID,
+                                MediaStore.Video.Media.SIZE,
+                                MediaStore.Video.Media.DURATION
+                            ),
+                            "${MediaStore.Video.Media.DISPLAY_NAME}=?",
+                            arrayOf(displayName),
+                            null
+                        )?.use { c ->
+                            collectRows(c, coll, rows)
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                if (rows.isEmpty()) {
+                    val sizeNote = if (sizeBytes > 0) "+大小查0行" else ""
+                    return ResolveOutcome.Miss("查0行(名:$displayName$sizeNote)")
+                }
+                val sized = if (sizeBytes > 0) rows.find { it.size == sizeBytes } else null
+                val chosen = sized ?: rows.singleOrNull()
+                if (chosen == null) {
+                    ResolveOutcome.Miss("同名${rows.size}行且大小不定")
+                } else {
+                    ResolveOutcome.Hit(android.content.ContentUris.withAppendedId(chosen.coll, chosen.id))
+                }
             } else {
-                ResolveOutcome.Hit(android.content.ContentUris.withAppendedId(chosen.coll, chosen.id))
+                ResolveOutcome.Miss("无文件名且大小未知")
             }
         } catch (e: Exception) {
             ResolveOutcome.Miss("err:" + shortErr(e))
         }
     }
+
+    private fun collectionFor(context: Context, vol: String): android.net.Uri {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Video.Media.getContentUri(vol)
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
+    }
+
+    private fun collectRows(
+        c: android.database.Cursor,
+        coll: android.net.Uri,
+        rows: MutableList<Row2>
+    ) {
+        val idIdx = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+        val sizeIdx = c.getColumnIndex(MediaStore.Video.Media.SIZE)
+        val durIdx = c.getColumnIndex(MediaStore.Video.Media.DURATION)
+        while (c.moveToNext()) {
+            rows.add(
+                Row2(
+                    coll,
+                    c.getLong(idIdx),
+                    if (sizeIdx >= 0) c.getLong(sizeIdx) else -1,
+                    if (durIdx >= 0) c.getLong(durIdx) else -1
+                )
+            )
+        }
+    }
+
+    private data class Row2(val coll: android.net.Uri, val id: Long, val size: Long, val dur: Long)
 
     /**
      * 无需系统框时的直接删除（API < 30，或 Document URI）。

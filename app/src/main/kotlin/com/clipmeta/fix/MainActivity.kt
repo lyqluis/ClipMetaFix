@@ -246,7 +246,7 @@ fun ClipMetaFixScreen() {
             val info = if (u == originalUri) originalInfo else if (u == editedUri) editedInfo else null
             val label = if (u == originalUri) "A" else if (u == editedUri) "B" else "?"
             when (val out = com.clipmeta.fix.util.MediaDeleter.resolveForDelete(
-                context, u, info?.displayName, info?.sizeBytes ?: -1
+                context, u, info?.displayName, info?.sizeBytes ?: -1, info?.durationMs
             )) {
                 is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Hit -> {
                     if (out.uri != u) resolveNotes.add("${label}归一命中")
