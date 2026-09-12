@@ -70,9 +70,14 @@ object MediaDeleter {
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
-    /** 是否标准 MediaStore 条目 URI（content://media/.../<数字id>，删框只认这种）。 */
+    /**
+     * 是否标准 MediaStore 条目 URI（删框只认这种）。
+     * 注意：数字尾段不够——picker 会话 URI（content://media/picker/…/media/<数字id>）
+     * 尾段也是数字，必须先排除 picker 路径，否则整批被拒。
+     */
     fun isStandardMediaItem(uri: Uri): Boolean {
         if (uri.authority != MediaStore.AUTHORITY) return false
+        if (UriRequireOriginal.isPickerUri(uri)) return false
         val tail = uri.lastPathSegment ?: return false
         return tail.isNotEmpty() && tail.all { it.isDigit() }
     }

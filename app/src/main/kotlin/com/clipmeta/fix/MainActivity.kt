@@ -288,8 +288,18 @@ fun ClipMetaFixScreen() {
                     }
                 }
             }
-            // R+：被拒的走一次批量系统删框
+            // R+：被拒的走一次批量系统删框。先自检：非标准形不进批量，
+            // 免得一个坏 URI 让整批被拒；它们直接进手动。
+            val manualOnly = mutableListOf<Uri>()
             if (denied.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val batchBad = denied.filter {
+                    !com.clipmeta.fix.util.MediaDeleter.isStandardMediaItem(it)
+                }
+                if (batchBad.isNotEmpty()) {
+                    manualOnly.addAll(batchBad)
+                    denied.removeAll(batchBad.toSet())
+                }
+                if (denied.isNotEmpty()) {
                 when (val req = com.clipmeta.fix.util.MediaDeleter.buildDeleteRequest(context, denied)) {
                     is com.clipmeta.fix.util.MediaDeleter.DeleteRequest.Ready -> {
                         pendingDeleteUris = deleted + denied
@@ -307,6 +317,7 @@ fun ClipMetaFixScreen() {
                         errHints.add("删框构造失败:" + req.reason)
                     is com.clipmeta.fix.util.MediaDeleter.DeleteRequest.Unsupported -> {}
                 }
+                }
             }
             // Q 单条授权 Sender（无批量框时）
             val sender = singleSender
@@ -322,23 +333,25 @@ fun ClipMetaFixScreen() {
                     errHints.add("弹框失败:" + com.clipmeta.fix.util.MediaDeleter.shortErr(e))
                 }
             }
-            if (denied.isEmpty()) {
+            val leftover = denied + manualOnly
+            if (leftover.isEmpty()) {
                 onDeleteDone(deleted.map(::toOriginal))
                 status = "已删除所选原文件，请去相册确认"
             } else {
                 if (deleted.isNotEmpty()) onDeleteDone(deleted.map(::toOriginal), clearResult = false)
                 val mperm = if (com.clipmeta.fix.util.MediaDeleter.hasBroadMediaRead(context)) "有" else "无"
                 val hint = (resolveNotes + errHints + listOf("mperm:$mperm")).distinct().take(4).joinToString("；")
-                val shapes = denied.map { d ->
+                val shapes = leftover.map { d ->
                     val o = toOriginal(d)
                     val label = if (o == originalUri) "A" else if (o == editedUri) "B" else "?"
-                    "$label(${com.clipmeta.fix.util.MediaDeleter.uriShape(d)})"
+                    val skip = if (d in manualOnly) "跳过删框" else null
+                    "$label(${com.clipmeta.fix.util.MediaDeleter.uriShape(d)}${skip?.let { ";$it" } ?: ""})"
                 }.joinToString("；")
                 val partialTip =
                     if (Build.VERSION.SDK_INT >= 34 && resolveNotes.any { it.contains("查0行") })
                         "；若照片权限给的是“仅选中部分”，请去系统设置改成允许全部后重试"
                     else ""
-                status = "删不动 ${denied.size} 个[$shapes]" +
+                status = "删不动 ${leftover.size} 个[$shapes]" +
                     (if (hint.isNotBlank()) "（$hint$partialTip）" else "") + "，请在相册手动删除"
             }
         }
