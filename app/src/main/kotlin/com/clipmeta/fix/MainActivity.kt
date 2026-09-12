@@ -249,12 +249,12 @@ fun ClipMetaFixScreen() {
                 context, u, info?.displayName, info?.sizeBytes ?: -1
             )) {
                 is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Hit -> {
-                    if (out.uri != u) resolveNotes.add("$label归一命中")
+                    if (out.uri != u) resolveNotes.add("${label}归一命中")
                     deleteBackMap[out.uri] = u
                     out.uri
                 }
                 is com.clipmeta.fix.util.MediaDeleter.ResolveOutcome.Miss -> {
-                    resolveNotes.add("$label反查miss(${out.reason})")
+                    resolveNotes.add("${label}反查miss(${out.reason})")
                     deleteBackMap[u] = u
                     u
                 }
